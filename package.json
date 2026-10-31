@@ -1,0 +1,18 @@
+{
+  "name": "afkclient",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Lightweight AFK client for Minecraft 1.21.11 accounts, controlled from a local browser page",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "node src/main.js",
+    "test": "node test/selfcheck.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "mineflayer": "^4.39.0",
+    "prismarine-auth": "^3.1.1"
+  }
+}

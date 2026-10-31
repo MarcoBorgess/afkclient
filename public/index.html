@@ -1,0 +1,641 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AFK Client</title>
+<link rel="icon" href="https://mc-heads.net/avatar/9e585523c04e45f5a4ebecdc32b92256/32">
+<style>
+  :root { color-scheme: dark; --bg: #16181d; --panel: #20232a; --line: #343842; --text: #e6e8ec; --dim: #9aa1ad; --accent: #5fb878; --warn: #e0b050; --bad: #e06c6c; }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, sans-serif; }
+  header { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  h1 { font-size: 16px; margin: 0; }
+  .brand { display: flex; align-items: center; gap: 6px; }
+  .brand img { height: 24px; }
+  dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 16px; width: min(440px, calc(100vw - 32px)); }
+  dialog::backdrop { background: rgb(0 0 0 / .6); }
+  dialog h3 { margin: 0 0 12px; font-size: 15px; overflow-wrap: anywhere; }
+  dialog form { flex-direction: column; gap: 10px; }
+  dialog .actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 4px; }
+  dialog input[type=text], select { flex: none; width: 100%; }
+  select { background: #14161a; color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px; font: inherit; }
+  .field { display: flex; flex-direction: column; gap: 4px; align-items: stretch; }
+  .menu { margin: 0; padding: 4px; min-width: 160px; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px; }
+  .menu button { display: block; width: 100%; text-align: left; border: 0; background: none; }
+  .menu button:hover { background: #2c3038; }
+  .menu label { display: flex; padding: 4px 10px; color: var(--text); }
+  .who { display: flex; align-items: center; gap: 8px; min-width: 0; overflow-wrap: anywhere; }
+  .head { width: 24px; height: 24px; flex: none; border-radius: 3px; image-rendering: pixelated; }
+  .dots { padding: 0 8px; font-size: 16px; line-height: 24px; }
+  h2 { font-size: 13px; margin: 14px 0 6px; color: var(--dim); }
+  main { display: grid; grid-template-columns: minmax(320px, 440px) minmax(0, 1fr); gap: 16px; padding: 16px; }
+  @media (max-width: 800px) { main { grid-template-columns: minmax(0, 1fr); } }
+  button { background: #2c3038; color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 4px 10px; font: inherit; cursor: pointer; }
+  button:hover { border-color: var(--dim); }
+  button.primary { background: #2f6b43; border-color: var(--accent); }
+  button.danger { color: var(--bad); }
+  input[type=text] { background: #14161a; color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px; font: inherit; min-width: 0; flex: 1; }
+  form { display: flex; gap: 6px; margin: 0; }
+  label { display: inline-flex; gap: 4px; align-items: center; color: var(--dim); }
+  .grow { flex: 1; min-width: 200px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px; margin-bottom: 12px; }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .spread { justify-content: space-between; }
+  .server { border-top: 1px solid var(--line); margin-top: 8px; padding-top: 8px; }
+  .server.current { outline: 1px solid var(--accent); outline-offset: 3px; border-radius: 2px; }
+  .address { font-weight: 600; overflow-wrap: anywhere; }
+  .online { color: var(--accent); }
+  .connecting, .reconnecting { color: var(--warn); }
+  .needs-signin { color: var(--warn); font-weight: 600; }
+  .offline { color: var(--dim); }
+  .note { color: var(--dim); font-size: 12px; overflow-wrap: anywhere; }
+  .error { color: var(--bad); }
+  .code { font: 600 18px ui-monospace, monospace; letter-spacing: 2px; color: var(--warn); }
+  .view-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px; }
+  .view-row.chat-row { grid-template-columns: minmax(0, 1fr) 240px; }
+  .view-row .card { margin: 0; min-width: 0; }
+  @media (max-width: 1200px) { .view-row, .view-row.chat-row { grid-template-columns: minmax(0, 1fr); } }
+  #scoreboard, .board { font: 12px ui-monospace, monospace; overflow-y: auto; max-height: 320px; }
+  #notice:not(:empty) { padding: 8px 16px 0; }
+  #group { padding: 16px; }
+  .boards { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; margin-top: 10px; }
+  .board { background: #14161a; border: 1px solid var(--line); border-radius: 4px; padding: 8px; }
+  .board .note { font-family: system-ui, sans-serif; margin-bottom: 6px; }
+  .edit { padding: 4px 6px; }
+  textarea { background: #14161a; color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px; font: 13px/1.4 ui-monospace, monospace; width: 100%; resize: vertical; }
+  .score-title { display: block; text-align: center; margin-bottom: 6px; overflow-wrap: anywhere; }
+  .score-line { display: flex; justify-content: space-between; gap: 8px; min-height: 16px; overflow-wrap: anywhere; }
+  .score-number { color: var(--bad); flex: none; }
+  #chat { height: 220px; overflow-y: auto; background: #14161a; border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; font: 13px ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; margin-bottom: 6px; }
+  .speaker { color: #6cb6ff; }
+  .nick { color: #ff5555; font-weight: 700; -webkit-text-stroke: .5px currentColor; } /* the stroke: bold alone barely shows in this font at 13px */
+  .grid { display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); gap: 3px; }
+  .slot { height: 40px; padding: 2px; font-size: 10px; line-height: 1.15; overflow: hidden; background: #2a2d35; border: 1px solid var(--line); border-radius: 3px; color: var(--text); position: relative; text-align: center; word-break: break-word; }
+  .slot.empty { background: #1b1d22; }
+  .slot.selected { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  .count { position: absolute; right: 2px; bottom: 0; font-weight: 700; color: var(--warn); }
+  .keys { user-select: none; }
+  kbd { background: #2c3038; border: 1px solid var(--line); border-radius: 3px; padding: 0 5px; font-size: 12px; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+</style>
+</head>
+<body>
+<header>
+  <h1 class="brand"><img src="/cat-cream.png" alt=""> AFK Client <img src="/cat-tabby.png" alt=""></h1>
+  <div class="row">
+    <button id="add-account" class="primary">Add Account</button>
+    <button id="open-group">Group</button>
+    <button id="open-quit" class="danger">Quit</button>
+  </div>
+</header>
+<div id="notice" class="error" role="status"></div>
+<div id="group" hidden></div>
+<main id="main">
+  <section aria-label="Accounts">
+    <div id="sign-in"></div>
+    <div id="accounts"></div>
+  </section>
+  <section id="view" aria-label="Connection" hidden></section>
+</main>
+
+<div id="account-menu" class="menu" popover>
+  <button id="menu-add-server" type="button">Add Server</button>
+  <button id="menu-remove-account" type="button" class="danger">Remove Account</button>
+</div>
+
+<div id="server-menu" class="menu" popover>
+  <label><input id="menu-auto" type="checkbox"> Auto-connect</label>
+  <label title="Reconnects when no scoreboard line has shown this server's address for a minute. Use it only on servers that display their address."><input id="menu-check" type="checkbox"> Must show address on scoreboard</label>
+  <label class="field" title="Sent when the scoreboard title is MINEHUT, again every 15 seconds until you leave the lobby. Empty turns it off.">Command in the Minehut lobby
+    <input id="menu-lobby" type="text" maxlength="256" placeholder="/join cobble">
+  </label>
+  <button id="menu-remove-server" type="button" class="danger">Remove</button>
+</div>
+
+<dialog id="add-server-dialog" aria-labelledby="add-server-title">
+  <h3 id="add-server-title"></h3>
+  <form id="add-server-form">
+    <label class="field">Server address
+      <input id="add-server-address" type="text" placeholder="play.example.com or host:port" required>
+    </label>
+    <label><input id="add-server-auto" type="checkbox" checked> Auto-connect when the app opens</label>
+    <div id="add-server-error" class="error" role="alert"></div>
+    <div class="actions">
+      <button type="button" data-close>Cancel</button>
+      <button class="primary">Add Server</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="remove-account-dialog" aria-labelledby="remove-account-title">
+  <h3 id="remove-account-title"></h3>
+  <p class="note">This disconnects it from every server and deletes its saved login. You would need to sign in again to add it back.</p>
+  <div id="remove-account-error" class="error" role="alert"></div>
+  <div class="actions">
+    <button type="button" data-close>Cancel</button>
+    <button id="remove-account-confirm" type="button" class="danger">Remove Account</button>
+  </div>
+</dialog>
+
+<dialog id="quit-dialog" aria-labelledby="quit-title">
+  <h3 id="quit-title">Quit AFK Client?</h3>
+  <p class="note">This disconnects every account and stops the app. Closing this tab does not: the accounts stay online. Double-click start.bat to open it again.</p>
+  <div class="actions">
+    <button type="button" data-close>Cancel</button>
+    <button id="quit-confirm" type="button" class="danger">Quit</button>
+  </div>
+</dialog>
+
+<dialog id="button-dialog" aria-labelledby="button-title">
+  <h3 id="button-title"></h3>
+  <form id="button-form">
+    <label class="field">Name
+      <input id="button-label" type="text" maxlength="40" required>
+    </label>
+    <label class="field">Steps, one per line
+      <textarea id="button-steps" rows="5" required></textarea>
+    </label>
+    <p class="note">A line is a command, "click 2 chest_minecart" (slot and item), "click all diamond" or "close". Hover a slot in Launch to see its number and item.<br>{shards} is the first number on the scoreboard line with that word and {purse.2} the second. A command with one repeats until it reaches 0. An account named in a command skips the button.</p>
+    <div id="button-error" class="error" role="alert"></div>
+    <div class="actions">
+      <button id="button-delete" type="button" class="danger">Delete</button>
+      <button type="button" data-close>Cancel</button>
+      <button class="primary">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+// Item names, chat and titles come from servers: only ever render them with textContent.
+const $ = id => document.getElementById(id)
+let currentId = null
+const lastSent = new Map() // per connection, so re-send can't repeat a command on the wrong account
+let held = new Set()
+let summary = null
+
+function el (tag, props = {}, ...children) {
+  const node = Object.assign(document.createElement(tag), props)
+  node.append(...children.filter(c => c != null))
+  return node
+}
+
+async function act (name, body = {}) {
+  const res = await fetch('/api/action/' + name, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  const result = await res.json()
+  if (!res.ok) throw new Error(result.error)
+  return result
+}
+
+// For buttons: show a failure instead of losing it.
+const run = (name, body) => act(name, body).catch(err => showError(err.message))
+function showError (message) { $('notice').textContent = message }
+
+const STATUS = { online: 'Online', connecting: 'Connecting…', reconnecting: 'Reconnecting…', 'needs-signin': 'Needs sign-in', offline: 'Offline' }
+
+// Redraw only real changes: replacing a button between press and release loses the click.
+const drawn = new Map()
+function changed (key, value) {
+  const json = JSON.stringify(value)
+  if (drawn.get(key) === json) return false
+  drawn.set(key, json)
+  return true
+}
+
+function renderSummary () {
+  if (!changed('summary', [summary, currentId])) return
+  const signIn = $('sign-in')
+  signIn.replaceChildren()
+  const s = summary.signIn
+  if (s?.state === 'waiting') {
+    signIn.append(el('div', { className: 'card' }, s.code
+      ? el('div', {}, 'Go to ', el('a', { href: s.url, target: '_blank', rel: 'noreferrer', textContent: s.url, style: 'color:inherit' }), ' and enter:', el('div', { className: 'code', textContent: s.code }))
+      : el('div', { textContent: 'Starting sign-in…' })))
+  } else if (s?.state === 'failed') {
+    signIn.append(el('div', { className: 'card error', textContent: 'Sign-in failed: ' + s.error }))
+  }
+
+  $('accounts').replaceChildren(...summary.accounts.map(renderAccount))
+  if (!summary.accounts.length) $('accounts').append(el('p', { className: 'note', textContent: 'No accounts yet. Click "Add account" to sign in.' }))
+}
+
+function renderAccount (account) {
+  return el('div', { className: 'card' },
+    el('div', { className: 'row spread' },
+      el('span', { className: 'who' },
+        el('img', { className: 'head', src: `https://mc-heads.net/avatar/${encodeURIComponent(account.uuid)}/24`, alt: '', onerror: e => { e.target.hidden = true } }),
+        el('strong', { textContent: account.name })),
+      el('button', { className: 'dots', textContent: '⋮', ariaLabel: 'Options for ' + account.name, ariaHasPopup: 'menu', onclick: e => openAccountMenu(e.currentTarget, account) })),
+    ...account.servers.map(renderServer))
+}
+
+// ----- account menu and dialogs: outside #accounts, so status updates can't close them -----
+
+let menuAccount = null
+
+let menuServer = null
+
+function openAccountMenu (button, account) {
+  menuAccount = account
+  openPopover('account-menu', button)
+  $('menu-add-server').focus()
+}
+
+function openPopover (id, button) {
+  const menu = $(id)
+  menu.showPopover()
+  const box = button.getBoundingClientRect()
+  menu.style.left = `${Math.max(8, box.right - menu.offsetWidth)}px`
+  menu.style.top = `${box.bottom + 4}px`
+}
+
+function openDialog (id) {
+  releaseKeys()
+  $('account-menu').hidePopover()
+  $(id).showModal()
+}
+
+$('menu-add-server').onclick = () => {
+  $('add-server-title').textContent = `Add Server to ${menuAccount.name}`
+  $('add-server-address').value = ''
+  $('add-server-auto').checked = true
+  $('add-server-error').textContent = ''
+  openDialog('add-server-dialog')
+}
+
+$('add-server-form').onsubmit = e => {
+  e.preventDefault()
+  act('addServer', { accountId: menuAccount.id, address: $('add-server-address').value, autoConnect: $('add-server-auto').checked })
+    .then(() => { $('add-server-dialog').close(); refresh() })
+    .catch(err => { $('add-server-error').textContent = err.message })
+}
+
+$('menu-remove-account').onclick = () => {
+  $('remove-account-title').textContent = `Remove ${menuAccount.name}?`
+  $('remove-account-error').textContent = ''
+  openDialog('remove-account-dialog')
+}
+
+$('remove-account-confirm').onclick = () => {
+  act('removeAccount', { id: menuAccount.id })
+    .then(() => {
+      $('remove-account-dialog').close()
+      if (currentId && !menuAccount.servers.every(s => s.id !== currentId)) closeView()
+      refresh()
+    })
+    .catch(err => { $('remove-account-error').textContent = err.message })
+}
+
+for (const button of document.querySelectorAll('[data-close]')) {
+  button.onclick = () => button.closest('dialog').close()
+}
+
+function openServerMenu (button, server) {
+  menuServer = server
+  $('menu-auto').checked = server.autoConnect
+  $('menu-check').checked = server.checkAddress
+  $('menu-lobby').value = server.lobbyCommand
+  openPopover('server-menu', button)
+  $('menu-auto').focus()
+}
+
+$('menu-auto').onchange = e => run('setAutoConnect', { id: menuServer.id, value: e.target.checked })
+$('menu-check').onchange = e => run('setCheckAddress', { address: `${menuServer.host}:${menuServer.port}`, value: e.target.checked })
+$('menu-lobby').onchange = e => run('setLobbyCommand', { address: `${menuServer.host}:${menuServer.port}`, value: e.target.value })
+$('menu-remove-server').onclick = () => {
+  $('server-menu').hidePopover()
+  if (currentId === menuServer.id) closeView()
+  run('removeServer', { id: menuServer.id })
+}
+
+function renderServer (server) {
+  const active = server.status !== 'offline'
+  return el('div', { className: 'server' + (server.id === currentId ? ' current' : '') },
+    el('div', { className: 'row spread' },
+      el('span', { className: 'address', textContent: server.port === 25565 ? server.host : `${server.host}:${server.port}` }),
+      el('span', {}, el('span', { className: server.status, textContent: STATUS[server.status] }), ' ', server.retryAt ? el('span', { className: 'note retry', dataset_retry: server.retryAt }) : null, ' ',
+        el('button', { className: 'dots', textContent: '⋮', ariaLabel: 'Options for ' + server.host, ariaHasPopup: 'menu', onclick: e => openServerMenu(e.currentTarget, server) }))),
+    server.code ? el('div', {}, el('a', { href: server.code.url, target: '_blank', rel: 'noreferrer', textContent: server.code.url, style: 'color:inherit' }), el('div', { className: 'code', textContent: server.code.code })) : null,
+    server.message ? el('div', { className: 'note', textContent: server.message }) : null,
+    el('div', { className: 'row', style: 'margin-top:6px' },
+      active
+        ? el('button', { textContent: 'Disconnect', onclick: () => run('disconnect', { id: server.id }) })
+        : el('button', { className: 'primary', textContent: 'Connect', onclick: () => run('connect', { id: server.id }) }),
+      el('button', { textContent: 'Launch', onclick: () => openView(server.id) })))
+}
+
+// ----- connection view -----
+
+function openView (id) {
+  releaseKeys()
+  currentId = id
+  $('view').hidden = false
+  $('view').replaceChildren(
+    el('div', { className: 'view-row chat-row' }, el('div', { className: 'card' },
+      el('div', { className: 'row spread' },
+        el('strong', { id: 'view-title' }),
+        el('button', { textContent: 'Close', onclick: closeView })),
+      el('div', { id: 'view-status', className: 'note', role: 'status' }),
+      el('h2', { textContent: 'Chat' }),
+      el('div', { id: 'chat', tabIndex: 0 }),
+      el('form', { onsubmit: sendChat },
+        el('input', { id: 'chat-text', type: 'text', maxLength: 256, placeholder: 'Message or /command', ariaLabel: 'Message or command' }),
+        el('button', { textContent: 'Send' }),
+        el('button', { id: 'resend', type: 'button', textContent: 'Re-send last', disabled: !lastSent.has(id), title: lastSent.get(id) ?? '', onclick: () => sendText(lastSent.get(currentId)) }))),
+    el('div', { className: 'card', id: 'scoreboard' })),
+    el('div', { className: 'view-row' }, el('div', { className: 'card', id: 'menu-card' }),
+    el('div', { className: 'card' },
+      el('h2', { textContent: 'Movement', style: 'margin-top:0' }),
+      el('div', { className: 'keys note' }, 'Click outside the text boxes, then hold ', el('kbd', { textContent: 'WASD' }), ' to walk, ', el('kbd', { textContent: 'Space' }), ' jump, ', el('kbd', { textContent: 'Shift' }), ' sneak, ', el('kbd', { textContent: 'Ctrl' }), ' sprint, arrows to turn.'),
+      el('div', { id: 'position', className: 'note' }),
+      el('h2', { textContent: 'Hotbar' }),
+      el('div', { id: 'hotbar', className: 'grid' }),
+      el('div', { className: 'row', style: 'margin-top:6px' },
+        el('button', { textContent: 'Use held item', onclick: () => run('useItem', { id: currentId }) })),
+      el('h2', { textContent: 'Inventory' }),
+      el('div', { id: 'inventory', className: 'grid' }))))
+  drawn.delete('sidebar')
+  drawn.delete('menu')
+  drawn.delete('items')
+  drawn.delete('chat')
+  refreshDetail(true)
+  renderSummary()
+}
+
+function closeView () {
+  releaseKeys()
+  currentId = null
+  $('view').hidden = true
+  $('view').replaceChildren()
+  renderSummary()
+}
+
+function sendChat (e) {
+  e.preventDefault()
+  sendText($('chat-text').value).then(sent => { if (sent) $('chat-text').value = '' })
+}
+
+function sendText (text) {
+  const id = currentId
+  return act('send', { id, text }).then(() => {
+    lastSent.set(id, text)
+    if (id === currentId) {
+      $('resend').disabled = false
+      $('resend').title = text
+    }
+    return true
+  }).catch(err => { $('view-status').textContent = err.message })
+}
+
+function slotNode (item, options = {}) {
+  const tip = item ? [item.name, ...item.lore, `Slot ${item.slot}, ${item.id}`].join('\n') : ''
+  const node = el('button', { type: 'button', className: 'slot' + (item ? '' : ' empty') + (options.selected ? ' selected' : ''), title: tip, ariaLabel: item ? `${item.name}, ${item.count}. ${item.lore.join('. ')}` : 'Empty slot' },
+    item ? item.name : '',
+    item && item.count > 1 ? el('span', { className: 'count', textContent: item.count }) : null)
+  if (options.click) node.onclick = e => options.click(e)
+  if (options.rightClick) node.oncontextmenu = e => { e.preventDefault(); options.rightClick(e) }
+  if (!options.click) node.disabled = !item
+  return node
+}
+
+function chatNodes (lines, name) {
+  const nick = new RegExp(`(${name.replace(/\W/g, '')})`, 'gi') // the capture keeps matches in split(), at odd positions
+  const marked = text => text.split(nick).map((part, j) => j % 2 ? el('strong', { className: 'nick', textContent: part }) : part)
+  return lines.flatMap((line, i) => {
+    // shortcut: guesses the speaker from the line's shape, so "TIP: hello" is colored too; servers format chat freely.
+    const speaker = /^(<[^>]+>|.{1,48}?(?= » |: ))/.exec(line.text)?.[0]
+    return [
+      ...(i ? ['\n'] : []),
+      ...(speaker ? [el('span', { className: 'speaker' }, ...marked(speaker))] : []),
+      ...marked(line.text.slice(speaker?.length ?? 0))
+    ]
+  })
+}
+
+function sidebarNodes (sidebar) {
+  return sidebar
+    ? [el('strong', { className: 'score-title', textContent: sidebar.title }),
+        ...sidebar.lines.map(line => el('div', { className: 'score-line' }, el('span', { textContent: line.text }), el('span', { className: 'score-number', textContent: line.number })))]
+    : [el('div', { className: 'note', textContent: 'No scoreboard on this server.' })]
+}
+
+function renderDetail (d, scrollChat) {
+  $('view-title').textContent = `${d.name} on ${d.address}`
+  if (d.status !== 'online') $('view-status').textContent = `${STATUS[d.status]} ${d.message}`
+  else if ($('view-status').textContent.startsWith(STATUS.offline) || !$('view-status').dataset.ok) { $('view-status').textContent = 'Online'; $('view-status').dataset.ok = 1 }
+
+  const chat = $('chat')
+  const stuck = scrollChat || chat.scrollTop + chat.clientHeight >= chat.scrollHeight - 20
+  const select = getSelection()
+  // Leave the log alone while text in it is selected, so it can be copied.
+  if ((select.isCollapsed || !chat.contains(select.anchorNode)) && changed('chat', [d.id, d.chat.length, d.chat.at(-1)?.at])) {
+    chat.replaceChildren(...chatNodes(d.chat, d.name))
+  }
+  if (stuck) chat.scrollTop = chat.scrollHeight
+
+  if (changed('sidebar', [d.id, d.sidebar])) {
+    $('scoreboard').replaceChildren(...sidebarNodes(d.sidebar))
+  }
+
+  const card = $('menu-card')
+  if (!changed('menu', [d.id, d.menu])) {
+    // unchanged, keep the existing buttons
+  } else if (d.menu) {
+    card.replaceChildren(
+      el('div', { className: 'row spread' },
+        el('strong', { textContent: d.menu.title || 'Menu' }),
+        el('button', { textContent: 'Close menu', onclick: () => run('closeMenu', { id: currentId }) })),
+      el('div', { className: 'note', textContent: 'Click = left click, right-click = right click, Shift+click = shift click', style: 'margin-bottom:6px' }),
+      el('div', { className: 'grid' }, ...d.menu.slots.map((item, slot) => slotNode(item, {
+        click: e => run('click', { id: currentId, slot, button: e.shiftKey ? 'shift' : 'left' }),
+        rightClick: () => run('click', { id: currentId, slot, button: 'right' })
+      }))))
+  } else {
+    card.replaceChildren(el('div', { className: 'note', textContent: 'No server menu open. Run a command or use an item to open one.' }))
+  }
+
+  $('position').textContent = d.position
+    ? `Position ${d.position.join(', ')} · Health ${Math.round(d.health)} · Food ${d.food} · Facing ${compass(d.yaw)}`
+    : ''
+  if (changed('items', [d.id, d.hotbar, d.selected, d.inventory])) {
+    $('hotbar').replaceChildren(...Array.from({ length: 9 }, (_, i) => slotNode(d.hotbar[i], {
+      selected: i === d.selected,
+      click: () => run('selectHotbar', { id: currentId, slot: i })
+    })))
+    $('inventory').replaceChildren(...d.inventory.map(item => slotNode(item)))
+  }
+}
+
+function compass (yaw) {
+  const names = ['N', 'NW', 'W', 'SW', 'S', 'SE', 'E', 'NE'] // yaw grows counter-clockwise from north
+  const step = Math.round(((yaw % (2 * Math.PI)) + 2 * Math.PI) / (Math.PI / 4)) % 8
+  return names[step]
+}
+
+// ----- group view -----
+
+let groups = []
+let editing = null
+const groupNodes = new Map() // kept between redraws, so a half-typed command survives
+
+function groupNode (address) {
+  const buttons = el('div', { className: 'row' })
+  const boards = el('div', { className: 'boards' })
+  const input = el('input', { type: 'text', maxLength: 256, placeholder: '/command for every account, {shards} reads the scoreboard', ariaLabel: `Command for every account on ${address}` })
+  const form = el('form', { style: 'margin-top:8px', onsubmit: e => {
+    e.preventDefault()
+    act('runGroup', { address, text: input.value }).then(() => { input.value = '' }).catch(err => showError(err.message))
+  } }, input, el('button', { textContent: 'Send' }))
+  const root = el('div', { className: 'card' }, el('div', { className: 'address', style: 'margin-bottom:8px', textContent: address.replace(/:25565$/, '') }), buttons, form, boards)
+  return { root, buttons, boards }
+}
+
+function openButtonDialog (address, index) {
+  const button = groups.find(g => g.address === address).buttons[index]
+  editing = { address, index }
+  $('button-title').textContent = `${button ? 'Edit' : 'Add'} button on ${address.replace(/:25565$/, '')}`
+  $('button-label').value = button?.label ?? ''
+  $('button-steps').value = button?.steps ?? ''
+  $('button-error').textContent = ''
+  $('button-delete').hidden = !button
+  $('button-dialog').showModal()
+}
+
+function saveButtons (change) {
+  const buttons = [...groups.find(g => g.address === editing.address).buttons]
+  change(buttons)
+  act('setButtons', { address: editing.address, buttons })
+    .then(() => { $('button-dialog').close(); refreshGroups() })
+    .catch(err => { $('button-error').textContent = err.message })
+}
+
+$('button-form').onsubmit = e => {
+  e.preventDefault()
+  saveButtons(buttons => buttons.splice(editing.index, 1, { label: $('button-label').value, steps: $('button-steps').value }))
+}
+$('button-delete').onclick = () => saveButtons(buttons => buttons.splice(editing.index, 1))
+
+function renderGroups () {
+  if (!changed('groups', groups)) return
+  const box = $('group')
+  for (const [address, node] of groupNodes) {
+    if (!groups.some(g => g.address === address)) {
+      node.root.remove()
+      groupNodes.delete(address)
+      drawn.delete('buttons ' + address)
+    }
+  }
+  for (const group of groups) {
+    if (!groupNodes.has(group.address)) groupNodes.set(group.address, groupNode(group.address))
+    const node = groupNodes.get(group.address)
+    if (!node.root.isConnected) box.append(node.root)
+    if (changed('buttons ' + group.address, group.buttons)) {
+      node.buttons.replaceChildren(
+        ...group.buttons.flatMap((button, i) => [
+          el('button', { className: 'primary', textContent: button.label, title: button.steps, onclick: () => run('runGroup', { address: group.address, text: button.steps }) }),
+          el('button', { className: 'edit', textContent: '✎', ariaLabel: 'Edit ' + button.label, onclick: () => openButtonDialog(group.address, i) })]),
+        el('button', { textContent: '+ Add button', onclick: () => openButtonDialog(group.address, group.buttons.length) }))
+    }
+    node.boards.replaceChildren(...group.accounts.map(account => el('div', { className: 'board' },
+      el('strong', { textContent: account.name }), ' ', el('span', { className: account.status, textContent: STATUS[account.status] }),
+      account.result ? el('div', { className: 'note', textContent: account.result }) : null,
+      ...sidebarNodes(account.sidebar))))
+  }
+  $('group-empty')?.remove()
+  if (!groups.length) box.append(el('p', { id: 'group-empty', className: 'note', textContent: 'No accounts are connected.' }))
+}
+
+async function refreshGroups () {
+  if ($('group').hidden) return
+  groups = await (await fetch('/api/groups')).json()
+  renderGroups()
+}
+
+$('open-group').onclick = () => {
+  const open = $('group').hidden
+  closeView()
+  $('group').hidden = !open
+  $('main').hidden = open
+  $('open-group').textContent = open ? 'Accounts' : 'Group'
+  refreshGroups()
+}
+
+// ----- keyboard movement -----
+
+const KEYS = { KeyW: 'forward', KeyS: 'back', KeyA: 'left', KeyD: 'right', Space: 'jump', ShiftLeft: 'sneak', ShiftRight: 'sneak', ControlLeft: 'sprint', ControlRight: 'sprint' }
+const LOOK = { ArrowLeft: [0.26, 0], ArrowRight: [-0.26, 0], ArrowUp: [0, 0.2], ArrowDown: [0, -0.2] }
+const typing = t => t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT'
+
+function releaseKeys () {
+  const id = currentId
+  for (const key of held) if (id) run('control', { id, key, state: false })
+  held.clear()
+}
+
+document.addEventListener('keydown', e => {
+  if (!currentId || typing(e.target) || e.altKey || e.metaKey || document.querySelector('dialog[open], :popover-open')) return
+  if (e.ctrlKey && e.code !== 'ControlLeft' && e.code !== 'ControlRight') return // leave browser shortcuts alone
+  const key = KEYS[e.code]
+  if (key) {
+    e.preventDefault()
+    if (!e.repeat && !held.has(key)) {
+      held.add(key)
+      run('control', { id: currentId, key, state: true })
+    }
+  } else if (LOOK[e.code]) {
+    e.preventDefault()
+    run('look', { id: currentId, yaw: LOOK[e.code][0], pitch: LOOK[e.code][1] })
+  }
+})
+document.addEventListener('keyup', e => {
+  const key = KEYS[e.code]
+  if (key && held.delete(key) && currentId) run('control', { id: currentId, key, state: false })
+})
+window.addEventListener('blur', releaseKeys)
+document.addEventListener('focusin', e => { if (typing(e.target)) releaseKeys() })
+
+// ----- data -----
+
+async function refresh () {
+  summary = await (await fetch('/api/summary')).json()
+  renderSummary()
+}
+
+async function refreshDetail (scrollChat) {
+  const id = currentId
+  if (!id) return
+  const res = await fetch('/api/detail?id=' + encodeURIComponent(id))
+  if (res.ok && id === currentId) renderDetail(await res.json(), scrollChat)
+}
+
+$('add-account').onclick = () => run('addAccount').then(refresh)
+
+$('open-quit').onclick = () => {
+  releaseKeys()
+  $('quit-dialog').showModal()
+}
+$('quit-confirm').onclick = () => {
+  run('quit').then(() => {
+    events.close()
+    $('quit-dialog').close()
+    document.body.replaceChildren(el('p', { style: 'padding:16px', textContent: 'AFK Client has stopped and every account is disconnected. You can close this tab.' }))
+  })
+}
+
+const events = new EventSource('/events')
+events.onmessage = e => {
+  const ids = JSON.parse(e.data)
+  refresh()
+  refreshGroups()
+  if (currentId && (ids.includes(currentId) || ids.includes(''))) refreshDetail()
+}
+setInterval(() => {
+  for (const node of document.querySelectorAll('.retry')) {
+    node.textContent = `in ${Math.max(0, Math.ceil((node.dataset_retry - Date.now()) / 1000))}s`
+  }
+}, 1000)
+refresh()
+</script>
+</body>
+</html>
