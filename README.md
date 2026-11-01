@@ -46,6 +46,8 @@ Hover over a slot in Launch to see its number and item name.
 
 An account whose name appears in a command skips that button, so it never pays itself.
 
+**Run All** runs every button in order, moving on if one fails. Drag buttons to change the order, or use Ctrl+arrow keys.
+
 ## Tests
 
 ```

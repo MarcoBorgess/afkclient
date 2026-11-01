@@ -584,7 +584,17 @@ class Manager extends EventEmitter {
 
   // Same steps on every online account of a server, each reporting in conn.result.
   runGroup (address, text) {
-    const steps = parseSteps(text)
+    return this.runJobs(address, [{ steps: parseSteps(text) }])
+  }
+
+  // Every button in its saved order. One failing or skipped button must not stop the next.
+  runAll (address) {
+    const { buttons } = this.settings(address)
+    if (!buttons.length) throw new Error('This server has no buttons')
+    return this.runJobs(address, buttons.map(({ label, steps }) => ({ label, steps: parseSteps(steps) })))
+  }
+
+  runJobs (address, jobs) {
     const conns = [...this.conns.values()].filter(c => c.status === 'online' && this.addressOf(c) === address)
     const report = (conn, result) => {
       conn.result = result
@@ -592,17 +602,18 @@ class Manager extends EventEmitter {
     }
     conns.forEach(async (conn, i) => {
       if (conn.running) return
-      if (namedIn(steps, conn.account.name)) return report(conn, 'Skipped: named in the command')
       conn.running = true
       report(conn, 'Running…')
-      try {
-        await wait(i * STAGGER)
-        report(conn, await this.runSteps(conn, steps))
-      } catch (err) {
-        report(conn, err.message)
-      } finally {
-        conn.running = false
+      await wait(i * STAGGER)
+      const results = []
+      for (const [j, { label, steps }] of jobs.entries()) {
+        const result = namedIn(steps, conn.account.name)
+          ? 'Skipped: named in the command'
+          : await this.runSteps(conn, steps).catch(err => err.message)
+        results.push(label ? `${label}: ${result}` : result)
+        report(conn, [...results, ...(j < jobs.length - 1 ? ['Running…'] : [])].join(' · '))
       }
+      conn.running = false
     })
     return { started: conns.length }
   }

@@ -52,6 +52,7 @@ function actions (manager, quit) {
     disconnect: b => manager.disconnect(b.id),
     send: b => manager.send(b.id, b.text),
     runGroup: b => manager.runGroup(b.address, b.text),
+    runAll: b => manager.runAll(b.address),
     setButtons: b => manager.setButtons(b.address, b.buttons),
     setCheckAddress: b => manager.setCheckAddress(b.address, b.value),
     setLobbyCommand: b => manager.setLobbyCommand(b.address, b.value),

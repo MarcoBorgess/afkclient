@@ -64,6 +64,7 @@
   .board { background: #14161a; border: 1px solid var(--line); border-radius: 4px; padding: 8px; }
   .board .note { font-family: system-ui, sans-serif; margin-bottom: 6px; }
   .edit { padding: 4px 6px; }
+  .movable { display: inline-flex; gap: 2px; cursor: grab; }
   textarea { background: #14161a; color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px; font: 13px/1.4 ui-monospace, monospace; width: 100%; resize: vertical; }
   .score-title { display: block; text-align: center; margin-bottom: 6px; overflow-wrap: anywhere; }
   .score-line { display: flex; justify-content: space-between; gap: 8px; min-height: 16px; overflow-wrap: anywhere; }
@@ -516,6 +517,15 @@ $('button-form').onsubmit = e => {
 }
 $('button-delete').onclick = () => saveButtons(buttons => buttons.splice(editing.index, 1))
 
+let dragged = null
+
+function moveButton (address, from, to) {
+  const buttons = [...groups.find(g => g.address === address).buttons]
+  if (from === to || to < 0 || to >= buttons.length) return
+  buttons.splice(to, 0, buttons.splice(from, 1)[0])
+  act('setButtons', { address, buttons }).then(refreshGroups).catch(err => showError(err.message))
+}
+
 function renderGroups () {
   if (!changed('groups', groups)) return
   const box = $('group')
@@ -532,9 +542,28 @@ function renderGroups () {
     if (!node.root.isConnected) box.append(node.root)
     if (changed('buttons ' + group.address, group.buttons)) {
       node.buttons.replaceChildren(
-        ...group.buttons.flatMap((button, i) => [
-          el('button', { className: 'primary', textContent: button.label, title: button.steps, onclick: () => run('runGroup', { address: group.address, text: button.steps }) }),
-          el('button', { className: 'edit', textContent: '✎', ariaLabel: 'Edit ' + button.label, onclick: () => openButtonDialog(group.address, i) })]),
+        ...(group.buttons.length ? [el('button', { textContent: 'Run All', title: group.buttons.map(b => b.label).join(' → '), onclick: () => run('runAll', { address: group.address }) })] : []),
+        ...group.buttons.map((button, i) => el('span', {
+          className: 'movable',
+          draggable: true,
+          ondragstart: e => {
+            dragged = { address: group.address, index: i }
+            e.dataTransfer.effectAllowed = 'move'
+          },
+          ondragover: e => { if (dragged?.address === group.address) e.preventDefault() },
+          ondrop: e => {
+            e.preventDefault()
+            moveButton(group.address, dragged.index, i)
+          },
+          ondragend: () => { dragged = null }
+        },
+        el('button', { className: 'primary', textContent: button.label, title: button.steps + '\n\nDrag to reorder, or Ctrl+arrow keys', onclick: () => run('runGroup', { address: group.address, text: button.steps }), onkeydown: e => {
+          const step = e.ctrlKey ? { ArrowLeft: -1, ArrowRight: 1 }[e.key] : 0
+          if (!step) return
+          e.preventDefault()
+          moveButton(group.address, i, i + step)
+        } }),
+        el('button', { className: 'edit', textContent: '✎', ariaLabel: 'Edit ' + button.label, onclick: () => openButtonDialog(group.address, i) }))),
         el('button', { textContent: '+ Add button', onclick: () => openButtonDialog(group.address, group.buttons.length) }))
     }
     node.boards.replaceChildren(...group.accounts.map(account => el('div', { className: 'board' },

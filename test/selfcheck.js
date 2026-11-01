@@ -212,6 +212,14 @@ async function rewardsAndPayments (manager, id, conn, server, address, clicks, c
   manager.runGroup(address, '/paygems {purse.2} main')
   await until('refused payment stops', () => !conn.running, 30000)
   assert.equal(conn.result, 'Stuck at 500: the payment changed nothing')
+
+  manager.setButtons(address, [{ label: 'Bad', steps: '/x {nothere}' }, { label: 'Ok', steps: '/after' }, { label: 'Self', steps: '/pay tester' }])
+  manager.runAll(address)
+  await until('run all', () => !conn.running && conn.result.startsWith('Bad'), 20000)
+  assert.equal(conn.result, 'Bad: {nothere} is not on the scoreboard · Ok: Done · Self: Skipped: named in the command')
+  await until('button after a failed one', () => chats.includes('/after'))
+  manager.setButtons(address, [])
+  assert.throws(() => manager.runAll(address), /no buttons/)
 }
 
 async function endToEnd (dataDir) {
