@@ -5,6 +5,7 @@ const { Users } = require('./users')
 const PORT = Number(process.env.PORT ?? 25599)
 const HOST = process.env.HOST ?? '127.0.0.1'
 const LOCAL = HOST === '127.0.0.1'
+const SERVERS = process.env.ALLOWED_SERVERS ?? 'cobblestone.gg,*.cobblestone.gg,minehut.gg,*.minehut.gg'
 const allowedHosts = process.env.PUBLIC_HOSTS?.split(',').map(host => host.trim().toLowerCase()).filter(Boolean) ??
   (LOCAL ? [`127.0.0.1:${PORT}`, `localhost:${PORT}`] : null)
 
@@ -22,7 +23,8 @@ try {
     dataDir: process.env.DATA_DIR ?? path.join(__dirname, '..', 'data'),
     tokenKey: process.env.TOKEN_KEY,
     adminName: process.env.ADMIN_USER,
-    adminPassword: process.env.ADMIN_PASSWORD
+    adminPassword: process.env.ADMIN_PASSWORD,
+    allowedServers: SERVERS.split(',').map(server => server.trim().toLowerCase()).filter(Boolean)
   })
 } catch (err) {
   stop(err.message)

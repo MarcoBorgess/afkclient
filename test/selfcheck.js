@@ -1,6 +1,8 @@
 // Run with: node test/selfcheck.js
 // Uses a local fake 1.21.11 server and a temp folder. Needs no Microsoft account or real server.
 const assert = require('assert')
+const crypto = require('crypto')
+const net = require('net')
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -95,13 +97,14 @@ function groupRules () {
 
 function requestChecks () {
   const req = (method, headers) => ({ method, headers })
-  const hosts = ['afk.example.com']
+  const hosts = ['https://afk.example.com']
   const json = 'application/json'
   const origin = 'https://afk.example.com'
   assert(isAllowedRequest(req('GET', {}), hosts))
   assert(isAllowedRequest(req('POST', { origin, 'content-type': json }), hosts))
   assert(!isAllowedRequest(req('POST', { origin: 'https://evil.com', 'content-type': json }), hosts), 'other website')
   assert(!isAllowedRequest(req('POST', { origin: 'https://afk.example.com.evil.com', 'content-type': json }), hosts), 'lookalike website')
+  assert(!isAllowedRequest(req('POST', { origin: 'http://afk.example.com', 'content-type': json }), hosts), 'plain http')
   assert(!isAllowedRequest(req('POST', { 'content-type': json }), hosts), 'no origin')
   assert(!isAllowedRequest(req('POST', { origin, 'content-type': 'text/plain' }), hosts), 'form post')
 }
@@ -122,7 +125,7 @@ async function tokens (dir) {
 }
 
 async function multiUser (dataDir) {
-  const options = { dataDir, tokenKey: TOKEN_KEY, adminName: 'Boss', adminPassword: 'boss-password' }
+  const options = { dataDir, tokenKey: TOKEN_KEY, adminName: 'Boss', adminPassword: 'boss-password', allowedServers: ['*.example.com', 'exact.test'] }
   assert.throws(() => new Users({ dataDir, tokenKey: TOKEN_KEY }), /ADMIN_USER/, 'first start needs an admin')
   const uuids = ['uuid-1', 'uuid-2', 'uuid-3', 'uuid-1']
   class FakeFlow {
@@ -178,6 +181,15 @@ async function multiUser (dataDir) {
   for (const name of ['createUser', 'setUserMax', 'setUserPassword', 'removeUser']) assert.equal((await call('POST', '/api/action/' + name, ann, {})).status, 403, name)
   assert.equal((await call('POST', '/api/action/quit', boss)).status, 404, 'nobody stops the app from the page')
 
+  // Old hashes keep working and get replaced at login.
+  const bossUser = users.list.find(u => u.name === 'boss')
+  const oldHash = crypto.scryptSync('boss-password', 'oldsalt', 64).toString('hex')
+  Object.assign(bossUser, { salt: 'oldsalt', hash: oldHash })
+  delete bossUser.cost
+  assert(await login('boss', 'boss-password'), 'old hash accepted')
+  assert(bossUser.cost > 16384 && bossUser.hash !== oldHash, 'old hash replaced')
+  assert(await login('boss', 'boss-password'), 'new hash accepted')
+
   // Limits and sign-in stay per user; one Minecraft account has one user.
   const summary = async cookie => (await call('GET', '/api/summary', cookie)).data
   const add = async cookie => {
@@ -212,6 +224,33 @@ async function multiUser (dataDir) {
   const address = 'shared.example.com:25565'
   assert.equal((await call('POST', '/api/action/setLobbyCommand', ann, { address, value: '/join ann' })).status, 200)
   assert.equal((await summary(bob)).accounts[0].servers[0].lobbyCommand, '', 'lobby command per user')
+  // Addresses from a request are only keys, never a way into every object in the app.
+  for (const name of ['setLobbyCommand', 'setCheckAddress']) {
+    for (const bad of ['__proto__', 'constructor', 'nope:1']) {
+      const refused = await call('POST', '/api/action/' + name, bob, { address: bad, value: '/pay bob 999' })
+      assert.match(refused.data.error, /Unknown server/, bad)
+    }
+  }
+  assert.match((await call('POST', '/api/action/runAll', bob, { address: '__proto__' })).data.error, /Unknown server/)
+  assert.equal(({}).lobbyCommand, undefined, 'nothing added to every object')
+  assert.equal(({}).checkAddress, undefined, 'nothing added to every object')
+  assert.equal((await summary(ann)).accounts[0].servers[0].lobbyCommand, '/join ann', 'own setting intact')
+
+  // Only listed servers: no internal addresses, no lookalikes.
+  for (const bad of ['127.0.0.1:80', '169.254.169.254:80', 'localhost:22', '10.0.0.1:6379', 'evil.com', 'example.com.evil.com', 'notexample.com', 'exact.test.evil.com']) {
+    assert.match((await call('POST', '/api/action/addServer', bob, { accountId: bobAccount.id, address: bad })).data.error, /allowed server list/, bad)
+  }
+  assert.equal((await call('POST', '/api/action/addServer', bob, { accountId: bobAccount.id, address: 'exact.test' })).status, 200)
+  for (let i = 0; i < 8; i++) assert.equal((await call('POST', '/api/action/addServer', bob, { accountId: bobAccount.id, address: `s${i}.example.com` })).status, 200)
+  assert.match((await call('POST', '/api/action/addServer', bob, { accountId: bobAccount.id, address: 'one-more.example.com' })).data.error, /10 servers/)
+  const outsideId = users.overview().find(u => u.name === 'bob').id
+  const bobServers = users.manager(outsideId).config.accounts[0].servers
+  bobServers[0].host = 'old.not-listed.net' // saved before the list existed
+  assert.equal((await call('POST', '/api/action/connect', bob, { id: bobServers[0].id })).status, 200)
+  assert.equal(users.manager(outsideId).conns.get(bobServers[0].id).status, 'offline')
+  assert.match(users.manager(outsideId).conns.get(bobServers[0].id).message, /allowed server list/)
+  bobServers[0].host = 'shared.example.com'
+
   const annManager = users.manager(users.overview().find(u => u.name === 'ann').id)
   const bobManager = users.manager(users.overview().find(u => u.name === 'bob').id)
   annManager.setButtons(address, [{ label: 'Ann', steps: '/ann' }])
@@ -229,9 +268,43 @@ async function multiUser (dataDir) {
   assert.equal((await call('GET', '/api/me', bob2)).status, 401)
 
   // Too many wrong passwords lock that name only.
-  for (let i = 0; i < 5; i++) assert.equal((await call('POST', '/api/login', null, { name: 'ann', password: 'wrong-password' })).status, 401)
+  let checked = 0
+  for (let wave = 0; wave < 10; wave++) {
+    const guesses = Array.from({ length: 12 }, (_, i) => call('POST', '/api/login', null, { name: 'ann', password: wave === 9 && i === 11 ? 'ann-password' : 'wrong-password' + wave + i }))
+    checked += (await Promise.all(guesses)).filter(result => result.status === 401).length
+  }
+  assert.equal(checked, 5, 'parallel guesses all count')
   assert.equal((await call('POST', '/api/login', null, { name: 'ann', password: 'ann-password' })).status, 429, 'even the right password')
   assert(await login('boss', 'boss-password'))
+  const fromIp = (ip, password) => fetch(`http://${host}/api/login`, { method: 'POST', headers: { origin: `http://${host}`, 'content-type': 'application/json', 'cf-connecting-ip': ip }, body: JSON.stringify({ name: 'ann', password }) })
+  assert.equal((await fromIp('9.9.9.9', 'ann-password')).status, 200, 'the owner is not locked out by a stranger')
+  let ceiling = 0
+  for (let ip = 0; ip < 8 && ceiling !== 429; ip++) {
+    for (let i = 0; i < 5; i++) ceiling = (await fromIp('8.8.8.' + ip, 'wrong-password')).status
+  }
+  assert.equal(ceiling, 429, 'many addresses still reach a ceiling for one name')
+  assert.equal((await fromIp('7.7.7.7', 'wrong-password')).status, 429)
+
+  // A bad request target gets an answer instead of leaving the connection open.
+  const answer = await new Promise(resolve => {
+    const socket = net.connect(WEB_PORT, '127.0.0.1', () => socket.write(`GET // HTTP/1.1\r\nHost: ${host}\r\nConnection: close\r\n\r\n`))
+    socket.once('data', chunk => { socket.destroy(); resolve(chunk.toString()) })
+    setTimeout(() => { socket.destroy(); resolve('no answer') }, 5000)
+  })
+  assert.match(answer, /^HTTP\/1\.1 400/)
+
+  // Hosted: the cookie cannot be set by a neighbour site, and only https origins count.
+  const hosted = startServer(users, { port: WEB_PORT + 1, allowedHosts: ['afk.example.com'], secure: true })
+  await new Promise(resolve => hosted.on('listening', resolve))
+  const hostedLogin = origin => fetch(`http://127.0.0.1:${WEB_PORT + 1}/api/login`, { method: 'POST', headers: { origin, 'content-type': 'application/json' }, body: JSON.stringify({ name: 'boss', password: 'boss-password' }) })
+  assert.equal((await hostedLogin('http://afk.example.com')).status, 403)
+  const hostedCookie = (await hostedLogin('https://afk.example.com')).headers.get('set-cookie')
+  assert.match(hostedCookie, /^__Host-afk_session=[0-9a-f]+;.*Path=\/; HttpOnly; SameSite=Lax; Secure$/)
+  const hostedMe = cookie => fetch(`http://127.0.0.1:${WEB_PORT + 1}/api/me`, { headers: { cookie } })
+  assert.equal((await hostedMe(hostedCookie.split(';')[0])).status, 200)
+  assert.equal((await hostedMe(hostedCookie.split(';')[0].replace('__Host-', ''))).status, 401, 'a cookie without the prefix is ignored')
+  hosted.closeAllConnections()
+  hosted.close()
 
   // Everything survives a restart, and a removed user leaves nothing behind.
   const again = new Users({ ...options, managerOptions: { flow: FakeFlow } })
@@ -367,6 +440,8 @@ async function endToEnd (dataDir) {
   await until('spawn', () => conn.status === 'online')
   await until('server chat line', () => conn.chat.some(c => c.text === 'hello from server'))
   await until('tick_end after a position', () => doubleMoves.seen > 0 && doubleMoves.ticks > 0)
+  manager.addChat(conn, 'x'.repeat(5000))
+  assert.equal(conn.chat.at(-1).text.length, 2000, 'long lines are cut')
   assert.equal(doubleMoves.count, 0, 'second position sent without tick_end')
 
   manager.send(id, '/daily')

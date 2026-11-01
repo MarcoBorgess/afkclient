@@ -5,7 +5,8 @@ const path = require('path')
 const PUBLIC = path.join(__dirname, '..', 'public')
 const MAX_BODY = 64 * 1024
 const HEARTBEAT = 30000 // proxies close a stream that stays silent for too long
-const COOKIE = 'afk_session'
+// __Host- makes browsers refuse this cookie from any other site under squareweb.app.
+const cookieName = secure => `${secure ? '__Host-' : ''}afk_session`
 const COOKIE_LIFE = 30 * 24 * 3600
 const HEADERS = {
   'Content-Security-Policy': "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' https://mc-heads.net; connect-src 'self'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'",
@@ -14,11 +15,14 @@ const HEADERS = {
 }
 
 // Blocks other websites from acting with a logged-in browser. GETs change nothing.
-function isAllowedRequest ({ method, headers }, allowedHosts) {
+function isAllowedRequest ({ method, headers }, allowedOrigins) {
   if (method === 'GET') return true
   if (!headers.origin || !(headers['content-type'] ?? '').startsWith('application/json')) return false
-  return allowedHosts.includes(headers.origin.replace(/^https?:\/\//, '').toLowerCase())
+  return allowedOrigins.includes(headers.origin.toLowerCase())
 }
+
+// Set by Cloudflare, in front of the site. Without it every visitor counts as the proxy, which only makes the login limit stricter.
+const clientIp = req => String(req.headers['cf-connecting-ip'] ?? req.socket.remoteAddress).slice(0, 64)
 
 function readJson (req) {
   return new Promise((resolve, reject) => {
@@ -76,6 +80,8 @@ function adminActions (users, userId) {
 }
 
 function startServer (users, { port, host = '127.0.0.1', allowedHosts, secure = false }) {
+  const COOKIE = cookieName(secure)
+  const allowedOrigins = allowedHosts.map(allowed => `${secure ? 'https' : 'http'}://${allowed}`)
   const clients = new Map() // open /events stream -> { token, userId }
   const pending = new Map() // userId -> changed connection ids
   let flush = null
@@ -117,15 +123,15 @@ function startServer (users, { port, host = '127.0.0.1', allowedHosts, secure = 
       res.writeHead(200, { ...HEADERS, 'Content-Type': type })
       res.end(fs.readFileSync(path.join(PUBLIC, name)))
     }
-    if (!isAllowedRequest(req, allowedHosts)) return json(403, { error: 'Forbidden' })
-    const url = new URL(req.url, 'http://localhost')
+    if (!isAllowedRequest(req, allowedOrigins)) return json(403, { error: 'Forbidden' })
     const cookie = (`Path=/; HttpOnly; SameSite=Lax${secure ? '; Secure' : ''}`)
     try {
+      const url = new URL(req.url, 'http://localhost')
       if (req.method === 'GET' && url.pathname === '/login') return file('login.html', 'text/html; charset=utf-8')
       if (req.method === 'GET' && /^\/cat-(cream|tabby)\.png$/.test(url.pathname)) return file(url.pathname.slice(1), 'image/png')
       if (req.method === 'POST' && url.pathname === '/api/login') {
         const { name, password } = await readJson(req)
-        const token = await users.login(name, password)
+        const token = await users.login(name, password, clientIp(req))
         return json(200, {}, { 'Set-Cookie': `${COOKIE}=${token}; Max-Age=${COOKIE_LIFE}; ${cookie}` })
       }
 

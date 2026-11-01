@@ -17,6 +17,8 @@ const MAX_DELAY = 300000
 const STABLE_AFTER = 60000
 const SPAWN_TIMEOUT = 120000
 const CHAT_LINES = 500
+const MAX_CHAT_LINE = 2000 // servers choose the length, and 500 huge lines could take the whole app down
+const MAX_SERVERS = 10
 const MOVE_PACKETS = ['position', 'position_look', 'look', 'flying']
 const CONTROLS = ['forward', 'back', 'left', 'right', 'jump', 'sprint', 'sneak']
 const NETWORK_ERRORS = ['ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT', 'ECONNRESET', 'ECONNREFUSED', 'ECONNABORTED',
@@ -311,12 +313,13 @@ function parseSteps (text) {
 const namedIn = (steps, name) => steps.some(step => step.type === 'send' && new RegExp(`\\b${name.replace(/\W/g, '')}\\b`, 'i').test(step.text))
 
 class Manager extends EventEmitter {
-  constructor ({ dataDir, tokens, botOptions = {}, flow = Authflow, addressGrace = ADDRESS_GRACE, maxAccounts = () => Infinity, isTaken = () => false }) {
+  constructor ({ dataDir, tokens, botOptions = {}, flow = Authflow, addressGrace = ADDRESS_GRACE, maxAccounts = () => Infinity, isTaken = () => false, isAllowedServer = () => true }) {
     super()
     this.configFile = path.join(dataDir, 'config.json')
     this.tokens = tokens
     this.maxAccounts = maxAccounts
     this.isTaken = isTaken
+    this.isAllowedServer = isAllowedServer
     this.botOptions = botOptions
     this.flow = flow
     this.addressGrace = addressGrace
@@ -330,7 +333,8 @@ class Manager extends EventEmitter {
       if (err.code !== 'ENOENT') throw new Error(`Cannot read ${this.configFile}: ${err.message}`)
       this.config = { accounts: [] }
     }
-    this.config.servers ??= {} // per address, shared by every account on that server
+    // Per address, shared by every account on that server. No prototype: the keys come from requests.
+    this.config.servers = Object.assign(Object.create(null), this.config.servers)
     for (const account of this.config.accounts) {
       for (const server of account.servers) this.conns.set(server.id, this.newConn(account, server))
     }
@@ -390,6 +394,8 @@ class Manager extends EventEmitter {
   addServer (accountId, address, autoConnect) {
     const account = this.account(accountId)
     const { host, port } = parseAddress(address)
+    if (!this.isAllowedServer(host)) throw new Error(`${host} is not on the allowed server list`)
+    if (account.servers.length >= MAX_SERVERS) throw new Error(`An account can have ${MAX_SERVERS} servers`)
     if (account.servers.some(s => s.host === host && s.port === port)) throw new Error('This server is already on the account')
     const server = { id: randomUUID(), host, port, autoConnect: !!autoConnect }
     account.servers.push(server)
@@ -417,18 +423,24 @@ class Manager extends EventEmitter {
     return (this.config.servers[address] ??= { buttons: [], checkAddress: false })
   }
 
+  checkKnownAddress (address) {
+    if (![...this.conns.values()].some(conn => this.addressOf(conn) === address)) throw new Error('Unknown server')
+  }
+
   setCheckAddress (address, value) {
+    this.checkKnownAddress(address)
     this.settings(address).checkAddress = !!value
     this.save()
   }
 
   setLobbyCommand (address, value) {
+    this.checkKnownAddress(address)
     this.settings(address).lobbyCommand = String(value ?? '').trim().slice(0, 256)
     this.save()
   }
 
   setButtons (address, buttons) {
-    if (![...this.conns.values()].some(conn => this.addressOf(conn) === address)) throw new Error('Unknown server')
+    this.checkKnownAddress(address)
     if (!Array.isArray(buttons)) throw new Error('Invalid buttons')
     const clean = buttons.map(({ label, steps }) => {
       if (!String(label ?? '').trim()) throw new Error('A button needs a name')
@@ -460,6 +472,8 @@ class Manager extends EventEmitter {
 
   connect (id) {
     const conn = this.conn(id)
+    // Added before the list existed, or the list changed since.
+    if (!this.isAllowedServer(conn.server.host)) return this.setStatus(conn, 'offline', 'This server is not on the allowed server list')
     conn.wanted = true
     conn.delay = FIRST_DELAY
     if (!conn.bot) this.open(conn)
@@ -497,7 +511,7 @@ class Manager extends EventEmitter {
   }
 
   addChat (conn, text) {
-    conn.chat.push({ at: Date.now(), text })
+    conn.chat.push({ at: Date.now(), text: String(text).slice(0, MAX_CHAT_LINE) })
     if (conn.chat.length > CHAT_LINES) conn.chat.shift()
     this.emit('changed', conn.server.id)
   }
@@ -673,6 +687,7 @@ class Manager extends EventEmitter {
 
   // Every button in its saved order. One failing or skipped button must not stop the next.
   runAll (address) {
+    this.checkKnownAddress(address)
     const { buttons } = this.settings(address)
     if (!buttons.length) throw new Error('This server has no buttons')
     return this.runJobs(address, buttons.map(({ label, steps }) => ({ label, steps: parseSteps(steps) })))

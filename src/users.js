@@ -8,14 +8,19 @@ const { createTokenStore } = require('./tokenCache')
 
 const hashWith = promisify(scrypt)
 const KEY_LENGTH = 64
-const MIN_PASSWORD = 8
+const COST = 2 ** 17
+const OLD_COST = 2 ** 14 // hashes stored without a cost; replaced at their next login
+const MAX_MEMORY = 256 * 1024 * 1024
+const MIN_PASSWORD = 12
 const MAX_PASSWORD = 200
 const DEFAULT_MAX_ACCOUNTS = 5
 const LOCK_AFTER = 5
+const NAME_LOCK_AFTER = 30
 const LOCK_FOR = 15 * 60000
+const MAX_HASHING = 2 // leaves threads free: DNS lookups for the accounts use the same pool
 const SESSION_LIFE = 30 * 24 * 3600000
 const NAME = /^[a-z0-9_.-]{2,32}$/
-const DUMMY = { salt: '00', hash: '00'.repeat(KEY_LENGTH) } // unknown names take as long as wrong passwords
+const DUMMY = { salt: '00', hash: '00'.repeat(KEY_LENGTH), cost: COST } // unknown names take as long as wrong passwords
 
 function fail (message, status) {
   return Object.assign(new Error(message), { status })
@@ -41,19 +46,26 @@ function cleanMax (value) {
 
 async function hashPassword (password) {
   const salt = randomBytes(16).toString('hex')
-  return { salt, hash: (await hashWith(password, salt, KEY_LENGTH)).toString('hex') }
+  return { salt, cost: COST, hash: (await hashWith(password, salt, KEY_LENGTH, { N: COST, maxmem: MAX_MEMORY })).toString('hex') }
 }
 
-async function passwordMatches (password, { salt, hash }) {
-  return timingSafeEqual(await hashWith(String(password), salt, KEY_LENGTH), Buffer.from(hash, 'hex'))
+async function passwordMatches (password, { salt, hash, cost = OLD_COST }) {
+  return timingSafeEqual(await hashWith(String(password), salt, KEY_LENGTH, { N: cost, maxmem: MAX_MEMORY }), Buffer.from(hash, 'hex'))
+}
+
+// Servers can be listed exactly or as *.example.com. Anything else, internal addresses included, is refused.
+function serverMatches (patterns, host) {
+  return patterns.some(pattern => pattern.startsWith('*.') ? host.endsWith(pattern.slice(1)) : host === pattern)
 }
 
 class Users extends EventEmitter {
-  constructor ({ dataDir, tokenKey, adminName, adminPassword, managerOptions = {} }) {
+  constructor ({ dataDir, tokenKey, adminName, adminPassword, allowedServers = ['*'], managerOptions = {} }) {
     super()
     this.dataDir = dataDir
     this.tokenKey = tokenKey
+    this.allowedServers = allowedServers
     this.managerOptions = managerOptions
+    this.hashing = 0
     this.file = path.join(dataDir, 'users.json')
     this.managers = new Map()
     // shortcut: sessions live in memory, so a restart asks everyone to log in again; store them if that gets annoying.
@@ -71,7 +83,7 @@ class Users extends EventEmitter {
       if (!adminName || !adminPassword) throw new Error('Set ADMIN_USER and ADMIN_PASSWORD to create the first user')
       checkPassword(adminPassword)
       const salt = randomBytes(16).toString('hex')
-      this.list.push({ id: randomUUID(), name: cleanName(adminName), admin: true, maxAccounts: DEFAULT_MAX_ACCOUNTS, salt, hash: scryptSync(adminPassword, salt, KEY_LENGTH).toString('hex') })
+      this.list.push({ id: randomUUID(), name: cleanName(adminName), admin: true, maxAccounts: DEFAULT_MAX_ACCOUNTS, salt, cost: COST, hash: scryptSync(adminPassword, salt, KEY_LENGTH, { N: COST, maxmem: MAX_MEMORY }).toString('hex') })
       this.save()
     }
     for (const user of this.list) this.startManager(user)
@@ -94,6 +106,7 @@ class Users extends EventEmitter {
       tokens: createTokenStore(path.join(dir, 'tokens'), this.tokenKey),
       maxAccounts: () => this.user(user.id).maxAccounts,
       isTaken: uuid => [...this.managers.values()].some(m => m.config.accounts.some(a => a.uuid === uuid)),
+      isAllowedServer: host => this.allowedServers.includes('*') || serverMatches(this.allowedServers, host),
       ...this.managerOptions
     })
     manager.on('changed', id => this.emit('changed', user.id, id))
@@ -120,19 +133,34 @@ class Users extends EventEmitter {
 
   // ----- logging in -----
 
-  async login (name, password) {
-    const key = String(name ?? '').trim().toLowerCase().slice(0, 32)
+  async login (name, password, ip = '') {
+    const key = String(name ?? '').trim().toLowerCase()
+    if (!NAME.test(key) || typeof password !== 'string' || password.length > MAX_PASSWORD) throw fail('Wrong username or password', 401)
     const now = Date.now()
     for (const [k, f] of this.failures) if (f.until <= now) this.failures.delete(k)
-    const failure = this.failures.get(key)
-    if (failure?.count >= LOCK_AFTER) throw fail('Too many attempts, try again in 15 minutes', 429)
+    // A stranger only locks themselves out of a name; many strangers together still hit a ceiling.
+    const fromIp = `ip ${ip} ${key}`
+    const fromAnywhere = `name ${key}`
+    if (this.failures.get(fromIp)?.count >= LOCK_AFTER || this.failures.get(fromAnywhere)?.count >= NAME_LOCK_AFTER) throw fail('Too many attempts, try again in 15 minutes', 429)
+    if (this.hashing >= MAX_HASHING) throw fail('Too many logins right now, try again in a moment', 429)
+    // Counted before the slow hash, or parallel guesses would all see the old count.
+    for (const k of [fromIp, fromAnywhere]) this.failures.set(k, { count: (this.failures.get(k)?.count ?? 0) + 1, until: now + LOCK_FOR })
     const user = this.list.find(u => u.name === key)
-    const matches = await passwordMatches(password, user ?? DUMMY)
-    if (!user || !matches) {
-      this.failures.set(key, { count: (failure?.count ?? 0) + 1, until: now + LOCK_FOR })
-      throw fail('Wrong username or password', 401)
+    this.hashing++
+    let matches = false
+    try {
+      matches = await passwordMatches(password, user ?? DUMMY)
+    } finally {
+      this.hashing--
     }
-    this.failures.delete(key)
+    if (!user || !matches) throw fail('Wrong username or password', 401)
+    this.failures.delete(fromIp)
+    const anywhere = this.failures.get(fromAnywhere)
+    if (anywhere) anywhere.count--
+    if (user.cost !== COST) {
+      Object.assign(user, await hashPassword(password))
+      this.save()
+    }
     const token = randomBytes(32).toString('hex')
     this.sessions.set(token, { userId: user.id, expires: now + SESSION_LIFE })
     return token

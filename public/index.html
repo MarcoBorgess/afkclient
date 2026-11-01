@@ -157,8 +157,8 @@
     <label class="field">Current password
       <input id="password-current" type="password" autocomplete="current-password" required>
     </label>
-    <label class="field">New password, at least 8 characters
-      <input id="password-next" type="password" autocomplete="new-password" minlength="8" maxlength="200" required>
+    <label class="field">New password, at least 12 characters
+      <input id="password-next" type="password" autocomplete="new-password" minlength="12" maxlength="200" required>
     </label>
     <div id="password-error" class="error" role="alert"></div>
     <div class="actions">
@@ -174,7 +174,7 @@
   <h2>New user</h2>
   <form id="new-user-form" class="row">
     <input id="new-user-name" type="text" placeholder="Username" aria-label="Username" autocomplete="off" required>
-    <input id="new-user-password" type="password" placeholder="Password" aria-label="Password" autocomplete="new-password" minlength="8" maxlength="200" required>
+    <input id="new-user-password" type="password" placeholder="Password" aria-label="Password" autocomplete="new-password" minlength="12" maxlength="200" required>
     <label>Max accounts <input id="new-user-max" type="number" min="0" max="100" value="5" required></label>
     <button class="primary">Create</button>
   </form>
@@ -763,7 +763,7 @@ const userAction = (name, body) => act(name, body).then(refreshUsers).catch(err 
 async function refreshUsers () {
   const list = await (await get('/api/users')).json()
   $('users-list').replaceChildren(...list.map(user => {
-    const password = el('input', { type: 'password', placeholder: 'New password', ariaLabel: 'New password for ' + user.name, autocomplete: 'new-password', minLength: 8, maxLength: 200, className: 'grow' })
+    const password = el('input', { type: 'password', placeholder: 'New password', ariaLabel: 'New password for ' + user.name, autocomplete: 'new-password', minLength: 12, maxLength: 200, className: 'grow' })
     return el('div', { className: 'user-row' },
       el('div', { className: 'row spread' },
         el('strong', { textContent: user.name + (user.admin ? ' (admin)' : '') }),
