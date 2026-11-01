@@ -377,7 +377,7 @@ function renderServer (server) {
   return el('div', { className: 'server' + (server.id === currentId ? ' current' : '') },
     el('div', { className: 'row spread' },
       el('span', { className: 'address', textContent: server.port === 25565 ? server.host : `${server.host}:${server.port}` }),
-      el('span', {}, el('span', { className: server.status, textContent: STATUS[server.status] }), ' ', server.retryAt ? el('span', { className: 'note retry', dataset_retry: server.retryAt }) : null, ' ',
+      el('span', {}, el('span', { className: server.status, textContent: STATUS[server.status] + (server.where ? ` · ${server.where}` : '') }), ' ', server.retryAt ? el('span', { className: 'note retry', dataset_retry: server.retryAt }) : null, ' ',
         el('button', { className: 'dots', textContent: '⋮', ariaLabel: 'Options for ' + server.host, ariaHasPopup: 'menu', onclick: e => openServerMenu(e.currentTarget, server) }))),
     server.code ? el('div', {}, el('a', { href: server.code.url, target: '_blank', rel: 'noreferrer', textContent: server.code.url, style: 'color:inherit' }), el('div', { className: 'code', textContent: server.code.code })) : null,
     server.message ? el('div', { className: 'note', textContent: server.message }) : null,

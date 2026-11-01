@@ -36,6 +36,11 @@ const STEP_TIMEOUT = 10000
 const DRAIN_GAP = 6000 // servers like Cobblestone refuse a second payment within 5s
 const MAX_PAYMENTS = 5
 const STAGGER = 1000
+const SCOREBOARD_ADDRESS = /\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}\b/
+const NOT_A_SERVER = ['discord', 'youtube', 'twitter', 'tiktok', 'instagram']
+const ADDRESS_PREFIXES = ['play', 'mc', 'hub', 'www', 'server', 'store', 'shop', 'lobby']
+const HOSTING_DOMAINS = ['minehut', 'aternos', 'minefort']
+const SERVER_NICKNAMES = { cobblestone: 'Cobble' }
 const MAP_SIZE = 128
 const MAX_MAPS = 16
 const FRAME_TYPES = [registry.entitiesByName.item_frame.id, registry.entitiesByName.glow_item_frame.id]
@@ -266,6 +271,22 @@ function mapWall (frames, maps) {
 const sidebarText = line => plainCaps(`${line.text} ${line.number}`)
 
 const inMinehutLobby = sidebar => plainCaps(sidebar?.title ?? '').trim() === 'minehut'
+
+// Where the account really is, which can differ from the address it connected to.
+function serverName (sidebar) {
+  if (!sidebar) return ''
+  if (inMinehutLobby(sidebar)) return 'Minehut'
+  const found = [plainCaps(sidebar.title), ...sidebar.lines.map(sidebarText)].reverse().flatMap(text => SCOREBOARD_ADDRESS.exec(text)?.[0] ?? [])
+  for (const address of found) {
+    const parts = address.split('.').slice(0, -1) // without the .gg
+    const site = parts.at(-1)
+    if (NOT_A_SERVER.includes(site)) continue
+    // On a hosting domain the server is the part before it: cobble.minehut.gg is Cobble.
+    const name = HOSTING_DOMAINS.includes(site) ? parts.slice(0, -1).filter(part => !ADDRESS_PREFIXES.includes(part)).at(-1) ?? site : site
+    return SERVER_NICKNAMES[name] ?? name[0].toUpperCase() + name.slice(1)
+  }
+  return sidebar.title.trim()
+}
 
 function showsAddress (sidebar, host) {
   return !!sidebar && [sidebar.title, ...sidebar.lines.map(sidebarText)].some(text => plainCaps(text).includes(host))
@@ -878,7 +899,7 @@ class Manager extends EventEmitter {
         uuid: account.uuid,
         servers: account.servers.map(server => {
           const conn = this.conns.get(server.id)
-          return { ...server, checkAddress: this.settings(this.addressOf(conn)).checkAddress, lobbyCommand: this.settings(this.addressOf(conn)).lobbyCommand ?? '', status: conn.status, message: conn.message, code: conn.code, retryAt: conn.retryAt }
+          return { ...server, where: conn.status === 'online' && conn.bot ? serverName(conn.readSidebar()) : '', checkAddress: this.settings(this.addressOf(conn)).checkAddress, lobbyCommand: this.settings(this.addressOf(conn)).lobbyCommand ?? '', status: conn.status, message: conn.message, code: conn.code, retryAt: conn.retryAt }
         })
       }))
     }
@@ -946,4 +967,4 @@ class Manager extends EventEmitter {
   }
 }
 
-module.exports = { Manager, VERSION, belowShown, blocksReconnect, fillAmounts, parseSteps, showsAddress, chatLine, toSignedByte, windowChecksum, isNetworkError, nextDelay, parseAddress, toText }
+module.exports = { Manager, VERSION, belowShown, blocksReconnect, fillAmounts, parseSteps, serverName, showsAddress, chatLine, toSignedByte, windowChecksum, isNetworkError, nextDelay, parseAddress, toText }
