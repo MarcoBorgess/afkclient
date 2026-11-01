@@ -1,5 +1,5 @@
 MAIN=src/main.js
-MEMORY=585
+MEMORY=512
 VERSION=recommended
 DISPLAY_NAME=AFK chora
 SUBDOMAIN=afk-chora
