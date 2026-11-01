@@ -164,6 +164,8 @@ async function multiUser (dataDir) {
   const signed = await call('POST', '/api/login', null, { name: 'boss', password: 'boss-password' })
   assert(/HttpOnly/.test(signed.setCookie) && /SameSite=Lax/.test(signed.setCookie))
   assert.equal((await call('GET', '/api/me', boss)).data.admin, true)
+  users.outgoingIp = '203.0.113.5'
+  assert.equal((await call('GET', '/api/me', boss)).data.ip, '203.0.113.5')
   assert.equal(fs.readFileSync(path.join(dataDir, 'users.json'), 'utf8').includes('boss-password'), false, 'password stored in plain text')
 
   // Admin only.
@@ -177,6 +179,7 @@ async function multiUser (dataDir) {
   const ann = await login('ann', 'ann-password')
   const bob = await login('bob', 'bob-password')
   assert.equal((await call('GET', '/api/me', ann)).data.admin, false)
+  assert.equal((await call('GET', '/api/me', ann)).data.ip, undefined, 'only the admin sees the IP')
   assert.equal((await call('GET', '/api/users', ann)).status, 403)
   for (const name of ['createUser', 'setUserMax', 'setUserPassword', 'removeUser']) assert.equal((await call('POST', '/api/action/' + name, ann, {})).status, 403, name)
   assert.equal((await call('POST', '/api/action/quit', boss)).status, 404, 'nobody stops the app from the page')

@@ -806,7 +806,7 @@ $('remove-user-confirm').onclick = () => {
 let me = {}
 get('/api/me').then(res => res.json()).then(user => {
   me = user
-  $('who').textContent = user.name
+  $('who').textContent = user.ip ? `${user.name} · IP ${user.ip}` : user.name
   $('open-users').hidden = !user.admin
 }).catch(() => {})
 

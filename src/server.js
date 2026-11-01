@@ -158,7 +158,7 @@ function startServer (users, { port, host = '127.0.0.1', allowedHosts, secure = 
           if (!streamsOf(userId).length) users.manager(userId)?.releaseControls() // don't keep walking after the page is gone
         })
       }
-      if (req.method === 'GET' && url.pathname === '/api/me') return json(200, { id: user.id, name: user.name, admin: !!user.admin })
+      if (req.method === 'GET' && url.pathname === '/api/me') return json(200, { id: user.id, name: user.name, admin: !!user.admin, ip: user.admin ? users.outgoingIp : undefined })
       if (req.method === 'GET' && url.pathname === '/api/summary') return json(200, manager.summary())
       if (req.method === 'GET' && url.pathname === '/api/groups') return json(200, manager.groups())
       if (req.method === 'GET' && url.pathname === '/api/detail') return json(200, manager.detail(url.searchParams.get('id')))
