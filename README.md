@@ -65,6 +65,10 @@ An account whose name appears in a command skips that button, so it never pays i
 
 **Run All** runs every button in order, moving on if one fails. Drag buttons to change the order, or use Ctrl+arrow keys.
 
+## When a connection drops
+
+Launch's chat shows the reason, the kick exactly as the server sent it, and the last packets exchanged. The same goes to the app's logs.
+
 ## Tests
 
 ```

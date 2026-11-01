@@ -14,12 +14,17 @@ const ChatMessage = require('prismarine-chat')(registry)
 
 const FIRST_DELAY = 5000
 const MAX_DELAY = 300000
+const RATE_LIMIT_DELAY = 120000 // retrying sooner keeps Mojang's limit from ever clearing
+const RETRY_JITTER = 5000 // accounts dropped together must not all sign in together
 const STABLE_AFTER = 60000
 const SPAWN_TIMEOUT = 120000
 const CHAT_LINES = 500
 const MAX_CHAT_LINE = 2000 // servers choose the length, and 500 huge lines could take the whole app down
 const MAX_SERVERS = 10
+const TRACE_SIZE = 30
+const SWITCH_PACKETS = ['login', 'respawn', 'start_configuration', 'finish_configuration', 'select_known_packs', 'add_resource_pack', 'remove_resource_pack', 'transfer', 'cookie_request', 'custom_payload', 'kick_disconnect', 'disconnect']
 const MOVE_PACKETS = ['position', 'position_look', 'look', 'flying']
+const QUIET_PACKETS = [...MOVE_PACKETS, 'tick_end', 'keep_alive', 'pong', 'ping_request', 'teleport_confirm', 'chunk_batch_received']
 const CONTROLS = ['forward', 'back', 'left', 'right', 'jump', 'sprint', 'sneak']
 const NETWORK_ERRORS = ['ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT', 'ECONNRESET', 'ECONNREFUSED', 'ECONNABORTED',
   'EHOSTUNREACH', 'ENETUNREACH', 'EPIPE', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET']
@@ -312,6 +317,25 @@ function parseSteps (text) {
 
 const namedIn = (steps, name) => steps.some(step => step.type === 'send' && new RegExp(`\\b${name.replace(/\W/g, '')}\\b`, 'i').test(step.text))
 
+// A proxy's kick can be one generic line. What was exchanged just before it is the only other clue.
+function traceConnection (bot) {
+  const client = bot._client
+  const trace = []
+  const note = text => {
+    trace.push(text)
+    if (trace.length > TRACE_SIZE) trace.shift()
+  }
+  const write = client.write.bind(client)
+  client.write = (name, params) => {
+    if (!QUIET_PACKETS.includes(name)) note(`sent:${client.state}:${name}`)
+    write(name, params)
+  }
+  client.on('packet', (data, { name, state }) => {
+    if (SWITCH_PACKETS.includes(name)) note(`got:${state}:${name}`)
+  })
+  return () => trace.join(' ')
+}
+
 class Manager extends EventEmitter {
   constructor ({ dataDir, tokens, botOptions = {}, flow = Authflow, addressGrace = ADDRESS_GRACE, maxAccounts = () => Infinity, isTaken = () => false, isAllowedServer = () => true }) {
     super()
@@ -489,11 +513,12 @@ class Manager extends EventEmitter {
     else this.setStatus(conn, 'offline', '')
   }
 
-  autoConnectAll (gap = 5000) {
+  autoConnectAll (gap = 5000, start = 0) {
     const ids = [...this.conns.values()].filter(c => c.server.autoConnect).map(c => c.server.id)
     ids.forEach((id, i) => setTimeout(() => {
       if (this.conns.has(id)) this.connect(id)
-    }, i * gap).unref())
+    }, start + i * gap).unref())
+    return start + ids.length * gap
   }
 
   shutdown () {
@@ -539,6 +564,7 @@ class Manager extends EventEmitter {
     conn.bot = bot
     sendTickEnd(bot)
     fixChatTracking(bot)
+    const readTrace = traceConnection(bot)
     conn.readSidebar = trackSidebar(bot, () => this.emit('changed', conn.server.id))
     conn.maps = new Map()
     conn.frames = new Map()
@@ -601,6 +627,12 @@ class Manager extends EventEmitter {
     const finish = message => {
       if (finished) return
       finished = true
+      if (conn.wanted) {
+        this.addChat(conn, `[client] Lost the connection: ${message}`)
+        if (kickReason) this.addChat(conn, `[client] Raw kick: ${kickReason}`)
+        this.addChat(conn, `[client] Last packets: ${readTrace()}`)
+        console.error(new Date().toISOString(), conn.account.name, this.addressOf(conn), message, kickReason, readTrace())
+      }
       clearTimeout(watchdog)
       clearInterval(addressCheck)
       conn.bot = null
@@ -611,8 +643,9 @@ class Manager extends EventEmitter {
       if (spawnedAt && Date.now() - spawnedAt > STABLE_AFTER) conn.delay = FIRST_DELAY
       if (conn.wanted && (authFailed || blocksReconnect(kickReason))) conn.wanted = false
       if (!conn.wanted) return this.setStatus(conn, 'offline', message)
-      conn.retryAt = Date.now() + conn.delay
-      conn.timer = setTimeout(() => this.open(conn), conn.delay)
+      const retryIn = conn.delay + Math.random() * RETRY_JITTER
+      conn.retryAt = Date.now() + retryIn
+      conn.timer = setTimeout(() => this.open(conn), retryIn)
       conn.delay = nextDelay(conn.delay)
       this.setStatus(conn, 'reconnecting', message)
     }
@@ -626,6 +659,10 @@ class Manager extends EventEmitter {
     bot.on('error', err => {
       const message = err?.message || String(err)
       if (isNetworkError(err)) return finish(message)
+      if (/Status code: 429/.test(message)) {
+        conn.delay = Math.max(conn.delay, RATE_LIMIT_DELAY)
+        return finish('Mojang refused the login: too many logins from this IP (429)')
+      }
       if (!signedIn && this.botOptions.auth !== 'offline') {
         authFailed = true
         return finish(`Sign-in failed: ${message}`)

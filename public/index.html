@@ -248,7 +248,10 @@ function loggedIn (res) {
 }
 
 // For buttons: show a failure instead of losing it.
-const run = (name, body) => act(name, body).catch(err => showError(err.message))
+const run = (name, body) => act(name, body).then(result => {
+  showError('') // an old failure must not look current
+  return result
+}).catch(err => showError(err.message))
 function showError (message) { $('notice').textContent = message }
 
 const STATUS = { online: 'Online', connecting: 'Connecting…', reconnecting: 'Reconnecting…', 'needs-signin': 'Needs sign-in', offline: 'Offline' }

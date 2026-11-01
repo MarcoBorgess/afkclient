@@ -559,9 +559,23 @@ async function endToEnd (dataDir) {
   await until('reconnecting status', () => conn.status === 'reconnecting')
   await until('rejoin after restart', () => conn.status === 'online')
 
+  // Mojang's login limit: wait long enough for it to clear instead of hammering it.
+  conn.bot.emit('error', new Error('Response is not JSON. Status code: 429'))
+  await until('rate limit noticed', () => conn.status === 'reconnecting')
+  assert.match(conn.message, /too many logins/)
+  assert(conn.retryAt - Date.now() > 100000, 'long wait after a 429')
+  assert(conn.wanted, 'keeps trying')
+  manager.connect(id)
+  await until('online after the limit', () => conn.status === 'online')
+
   // A duplicate-login kick must leave real Minecraft alone.
   server.lastClient.write('kick_disconnect', { reason: nbt.comp({ translate: nbt.string('multiplayer.disconnect.duplicate_login') }) })
   await until('stop after duplicate login', () => conn.status === 'offline')
+  const report = conn.chat.slice(-3).map(line => line.text)
+  assert.match(report[0], /^\[client\] Lost the connection: Kicked/)
+  assert.match(report[1], /^\[client\] Raw kick: .*duplicate_login/)
+  assert.match(report[2], /^\[client\] Last packets: .*got:play:kick_disconnect/)
+  assert(!/position|tick_end/.test(report[2]), 'movement would push out everything useful')
   assert.equal(conn.wanted, false)
   await wait(500)
   assert.equal(conn.status, 'offline', 'must stay offline')

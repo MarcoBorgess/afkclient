@@ -124,7 +124,9 @@ class Users extends EventEmitter {
   }
 
   autoConnectAll () {
-    for (const manager of this.managers.values()) manager.autoConnectAll()
+    // One after another across users: Mojang limits logins per IP, and they all share this one.
+    let start = 0
+    for (const manager of this.managers.values()) start = manager.autoConnectAll(undefined, start)
   }
 
   shutdown () {
