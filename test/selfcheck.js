@@ -281,23 +281,13 @@ async function multiUser (dataDir) {
   assert.equal((await call('POST', '/api/logout', bob2)).status, 200)
   assert.equal((await call('GET', '/api/me', bob2)).status, 401)
 
-  // Too many wrong passwords lock that name only.
-  let checked = 0
-  for (let wave = 0; wave < 10; wave++) {
-    const guesses = Array.from({ length: 12 }, (_, i) => call('POST', '/api/login', null, { name: 'ann', password: wave === 9 && i === 11 ? 'ann-password' : 'wrong-password' + wave + i }))
-    checked += (await Promise.all(guesses)).filter(result => result.status === 401).length
-  }
-  assert.equal(checked, 5, 'parallel guesses all count')
-  assert.equal((await call('POST', '/api/login', null, { name: 'ann', password: 'ann-password' })).status, 429, 'even the right password')
-  assert(await login('boss', 'boss-password'))
-  const fromIp = (ip, password) => fetch(`http://${host}/api/login`, { method: 'POST', headers: { origin: `http://${host}`, 'content-type': 'application/json', 'cf-connecting-ip': ip }, body: JSON.stringify({ name: 'ann', password }) })
-  assert.equal((await fromIp('9.9.9.9', 'ann-password')).status, 200, 'the owner is not locked out by a stranger')
-  let ceiling = 0
-  for (let ip = 0; ip < 8 && ceiling !== 429; ip++) {
-    for (let i = 0; i < 5; i++) ceiling = (await fromIp('8.8.8.' + ip, 'wrong-password')).status
-  }
-  assert.equal(ceiling, 429, 'many addresses still reach a ceiling for one name')
-  assert.equal((await fromIp('7.7.7.7', 'wrong-password')).status, 429)
+  // Wrong passwords never lock anyone out, and the slow hash stays limited to two at a time.
+  for (let i = 0; i < 8; i++) assert.equal((await call('POST', '/api/login', null, { name: 'ann', password: 'wrong-password' })).status, 401)
+  assert(await login('ann', 'ann-password'), 'still able to log in')
+  const parallel = await Promise.all(Array.from({ length: 12 }, () => call('POST', '/api/login', null, { name: 'ann', password: 'wrong-password' })))
+  assert.equal(parallel.filter(result => result.status === 401).length, 2)
+  assert.equal(parallel.filter(result => result.status === 429).length, 10)
+  assert(await login('ann', 'ann-password'), 'the limit ends with the requests')
 
   // A bad request target gets an answer instead of leaving the connection open.
   const answer = await new Promise(resolve => {

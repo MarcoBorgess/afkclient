@@ -14,9 +14,6 @@ const MAX_MEMORY = 256 * 1024 * 1024
 const MIN_PASSWORD = 12
 const MAX_PASSWORD = 200
 const DEFAULT_MAX_ACCOUNTS = 5
-const LOCK_AFTER = 5
-const NAME_LOCK_AFTER = 30
-const LOCK_FOR = 15 * 60000
 const MAX_HASHING = 2 // leaves threads free: DNS lookups for the accounts use the same pool
 const SESSION_LIFE = 30 * 24 * 3600000
 const NAME = /^[a-z0-9_.-]{2,32}$/
@@ -70,7 +67,6 @@ class Users extends EventEmitter {
     this.managers = new Map()
     // shortcut: sessions live in memory, so a restart asks everyone to log in again; store them if that gets annoying.
     this.sessions = new Map()
-    this.failures = new Map()
     fs.mkdirSync(dataDir, { recursive: true })
     try {
       this.list = JSON.parse(fs.readFileSync(this.file, 'utf8'))
@@ -135,18 +131,10 @@ class Users extends EventEmitter {
 
   // ----- logging in -----
 
-  async login (name, password, ip = '') {
+  async login (name, password) {
     const key = String(name ?? '').trim().toLowerCase()
     if (!NAME.test(key) || typeof password !== 'string' || password.length > MAX_PASSWORD) throw fail('Wrong username or password', 401)
-    const now = Date.now()
-    for (const [k, f] of this.failures) if (f.until <= now) this.failures.delete(k)
-    // A stranger only locks themselves out of a name; many strangers together still hit a ceiling.
-    const fromIp = `ip ${ip} ${key}`
-    const fromAnywhere = `name ${key}`
-    if (this.failures.get(fromIp)?.count >= LOCK_AFTER || this.failures.get(fromAnywhere)?.count >= NAME_LOCK_AFTER) throw fail('Too many attempts, try again in 15 minutes', 429)
     if (this.hashing >= MAX_HASHING) throw fail('Too many logins right now, try again in a moment', 429)
-    // Counted before the slow hash, or parallel guesses would all see the old count.
-    for (const k of [fromIp, fromAnywhere]) this.failures.set(k, { count: (this.failures.get(k)?.count ?? 0) + 1, until: now + LOCK_FOR })
     const user = this.list.find(u => u.name === key)
     this.hashing++
     let matches = false
@@ -156,15 +144,12 @@ class Users extends EventEmitter {
       this.hashing--
     }
     if (!user || !matches) throw fail('Wrong username or password', 401)
-    this.failures.delete(fromIp)
-    const anywhere = this.failures.get(fromAnywhere)
-    if (anywhere) anywhere.count--
     if (user.cost !== COST) {
       Object.assign(user, await hashPassword(password))
       this.save()
     }
     const token = randomBytes(32).toString('hex')
-    this.sessions.set(token, { userId: user.id, expires: now + SESSION_LIFE })
+    this.sessions.set(token, { userId: user.id, expires: Date.now() + SESSION_LIFE })
     return token
   }
 
