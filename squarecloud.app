@@ -1,5 +1,5 @@
 MAIN=src/main.js
-MEMORY=3072
+MEMORY=768
 VERSION=recommended
 DISPLAY_NAME=AFK Client
 SUBDOMAIN=afkparmegio
