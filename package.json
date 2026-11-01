@@ -2,7 +2,7 @@
   "name": "afkclient",
   "version": "1.0.0",
   "private": true,
-  "description": "Lightweight AFK client for Minecraft 1.21.11 accounts, controlled from a local browser page",
+  "description": "Lightweight AFK client for Minecraft 1.21.11 accounts, controlled from a website with separate users",
   "main": "src/main.js",
   "scripts": {
     "start": "node src/main.js",
