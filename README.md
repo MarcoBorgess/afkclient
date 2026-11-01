@@ -65,6 +65,10 @@ An account whose name appears in a command skips that button, so it never pays i
 
 **Run All** runs every button in order, moving on if one fails. Drag buttons to change the order, or use Ctrl+arrow keys.
 
+## Captcha
+
+An account in Minehut's captcha world shows **Offline - Captcha**. It is connected, so open Launch, read the map and answer in chat. Group commands, lobby commands and the scoreboard address check leave it alone until it is through.
+
 ## When a connection drops
 
 Launch's chat shows the reason, the kick exactly as the server sent it, and the last packets exchanged. The same goes to the app's logs.
