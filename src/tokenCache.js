@@ -1,24 +1,29 @@
-const { execFile } = require('child_process')
-const { createHash } = require('crypto')
+const { createCipheriv, createDecipheriv, createHash, randomBytes } = require('crypto')
 const fs = require('fs')
 const path = require('path')
 
-function dpapi (method, base64) {
-  // The secret goes over stdin because command-line arguments are visible to other processes.
-  const script = 'Add-Type -AssemblyName System.Security;' +
-    '$b=[Convert]::FromBase64String([Console]::In.ReadToEnd().Trim());' +
-    `[Convert]::ToBase64String([Security.Cryptography.ProtectedData]::${method}($b,$null,'CurrentUser'))`
-  return new Promise((resolve, reject) => {
-    const child = execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script],
-      { windowsHide: true }, (err, stdout) => err ? reject(err) : resolve(stdout.trim()))
-    child.stdin.end(base64)
-  })
+const IV_LENGTH = 12
+const TAG_LENGTH = 16
+
+function encrypt (key, text) {
+  const iv = randomBytes(IV_LENGTH)
+  const cipher = createCipheriv('aes-256-gcm', key, iv)
+  const body = Buffer.concat([cipher.update(text, 'utf8'), cipher.final()])
+  return Buffer.concat([iv, cipher.getAuthTag(), body]).toString('base64')
 }
 
-// Same interface as prismarine-auth's FileCache, but encrypted for the current Windows user.
-class DpapiCache {
-  constructor (file) {
+function decrypt (key, encoded) {
+  const data = Buffer.from(encoded, 'base64')
+  const decipher = createDecipheriv('aes-256-gcm', key, data.subarray(0, IV_LENGTH))
+  decipher.setAuthTag(data.subarray(IV_LENGTH, IV_LENGTH + TAG_LENGTH))
+  return Buffer.concat([decipher.update(data.subarray(IV_LENGTH + TAG_LENGTH)), decipher.final()]).toString('utf8')
+}
+
+// Same interface as prismarine-auth's FileCache, but encrypted with TOKEN_KEY.
+class EncryptedCache {
+  constructor (file, key) {
     this.file = file
+    this.key = key
     this.writes = Promise.resolve()
   }
 
@@ -29,9 +34,7 @@ class DpapiCache {
 
   async load () {
     try {
-      const encrypted = await fs.promises.readFile(this.file, 'utf8')
-      const plain = await dpapi('Unprotect', encrypted)
-      this.cache = JSON.parse(Buffer.from(plain, 'base64').toString('utf8'))
+      this.cache = JSON.parse(decrypt(this.key, await fs.promises.readFile(this.file, 'utf8')))
     } catch {
       this.cache = {} // missing or unreadable: the account signs in again
     }
@@ -57,21 +60,20 @@ class DpapiCache {
   }
 
   async save () {
-    const plain = Buffer.from(JSON.stringify(this.cache), 'utf8').toString('base64')
-    const encrypted = await dpapi('Protect', plain)
     await fs.promises.mkdir(path.dirname(this.file), { recursive: true })
-    await fs.promises.writeFile(this.file + '.tmp', encrypted)
+    await fs.promises.writeFile(this.file + '.tmp', encrypt(this.key, JSON.stringify(this.cache)))
     await fs.promises.rename(this.file + '.tmp', this.file)
   }
 }
 
-function createTokenStore (dir) {
+function createTokenStore (dir, secret) {
+  const key = createHash('sha256').update(secret).digest()
   const caches = new Map() // shared so one account's connections see each other's refreshed tokens
   const prefix = username => createHash('sha256').update(username).digest('hex').slice(0, 32) + '_'
   return {
     factory ({ username, cacheName }) {
       const file = path.join(dir, `${prefix(username)}${cacheName}.dat`)
-      if (!caches.has(file)) caches.set(file, new DpapiCache(file))
+      if (!caches.has(file)) caches.set(file, new EncryptedCache(file, key))
       return caches.get(file)
     },
     async remove (username) {

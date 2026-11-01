@@ -19,7 +19,13 @@
   dialog h3 { margin: 0 0 12px; font-size: 15px; overflow-wrap: anywhere; }
   dialog form { flex-direction: column; gap: 10px; }
   dialog .actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 4px; }
-  dialog input[type=text], select { flex: none; width: 100%; }
+  dialog.wide { width: min(640px, calc(100vw - 32px)); }
+  dialog input[type=text], dialog input[type=password], select { flex: none; width: 100%; }
+  dialog form.row { flex-direction: row; }
+  dialog form.row input[type=text], dialog form.row input[type=password] { flex: 1 1 140px; width: auto; }
+  input[type=password], input[type=number] { background: #14161a; color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px; font: inherit; min-width: 0; }
+  input[type=number] { width: 72px; }
+  .user-row { padding: 8px 0; border-bottom: 1px solid var(--line); }
   select { background: #14161a; color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px; font: inherit; }
   .field { display: flex; flex-direction: column; gap: 4px; align-items: stretch; }
   .menu { margin: 0; padding: 4px; min-width: 160px; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px; }
@@ -86,9 +92,12 @@
 <header>
   <h1 class="brand"><img src="/cat-cream.png" alt=""> AFK Client <img src="/cat-tabby.png" alt=""></h1>
   <div class="row">
+    <span id="who" class="note"></span>
     <button id="add-account" class="primary">Add Account</button>
     <button id="open-group">Group</button>
-    <button id="open-quit" class="danger">Quit</button>
+    <button id="open-users" hidden>Users</button>
+    <button id="open-password">Password</button>
+    <button id="logout">Log out</button>
   </div>
 </header>
 <div id="notice" class="error" role="status"></div>
@@ -140,12 +149,43 @@
   </div>
 </dialog>
 
-<dialog id="quit-dialog" aria-labelledby="quit-title">
-  <h3 id="quit-title">Quit AFK Client?</h3>
-  <p class="note">This disconnects every account and stops the app. Closing this tab does not: the accounts stay online. Double-click start.bat to open it again.</p>
+<dialog id="password-dialog" aria-labelledby="password-title">
+  <h3 id="password-title">Change your password</h3>
+  <form id="password-form">
+    <label class="field">Current password
+      <input id="password-current" type="password" autocomplete="current-password" required>
+    </label>
+    <label class="field">New password, at least 8 characters
+      <input id="password-next" type="password" autocomplete="new-password" minlength="8" maxlength="200" required>
+    </label>
+    <div id="password-error" class="error" role="alert"></div>
+    <div class="actions">
+      <button type="button" data-close>Cancel</button>
+      <button class="primary">Change password</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="users-dialog" class="wide" aria-labelledby="users-title">
+  <h3 id="users-title">Users</h3>
+  <div id="users-list"></div>
+  <h2>New user</h2>
+  <form id="new-user-form" class="row">
+    <input id="new-user-name" type="text" placeholder="Username" aria-label="Username" autocomplete="off" required>
+    <input id="new-user-password" type="password" placeholder="Password" aria-label="Password" autocomplete="new-password" minlength="8" maxlength="200" required>
+    <label>Max accounts <input id="new-user-max" type="number" min="0" max="100" value="5" required></label>
+    <button class="primary">Create</button>
+  </form>
+  <div id="users-error" class="error" role="alert"></div>
+  <div class="actions"><button type="button" data-close>Close</button></div>
+</dialog>
+
+<dialog id="remove-user-dialog" aria-labelledby="remove-user-title">
+  <h3 id="remove-user-title"></h3>
+  <p class="note">This disconnects their accounts and deletes their saved logins, buttons and settings. It cannot be undone.</p>
   <div class="actions">
     <button type="button" data-close>Cancel</button>
-    <button id="quit-confirm" type="button" class="danger">Quit</button>
+    <button id="remove-user-confirm" type="button" class="danger">Remove User</button>
   </div>
 </dialog>
 
@@ -183,10 +223,26 @@ function el (tag, props = {}, ...children) {
 }
 
 async function act (name, body = {}) {
-  const res = await fetch('/api/action/' + name, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  return post('/api/action/' + name, body)
+}
+
+async function post (url, body = {}) {
+  const res = loggedIn(await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }))
   const result = await res.json()
   if (!res.ok) throw new Error(result.error)
   return result
+}
+
+async function get (url) {
+  return loggedIn(await fetch(url))
+}
+
+function loggedIn (res) {
+  if (res.status === 401) {
+    location.replace('/login')
+    throw new Error('Logged out')
+  }
+  return res
 }
 
 // For buttons: show a failure instead of losing it.
@@ -217,7 +273,8 @@ function renderSummary () {
     signIn.append(el('div', { className: 'card error', textContent: 'Sign-in failed: ' + s.error }))
   }
 
-  $('accounts').replaceChildren(...summary.accounts.map(renderAccount))
+  $('accounts').replaceChildren(...summary.accounts.map(renderAccount),
+    el('p', { className: 'note', textContent: `${summary.accounts.length} of ${summary.maxAccounts} accounts used.` }))
   if (!summary.accounts.length) $('accounts').append(el('p', { className: 'note', textContent: 'No accounts yet. Click "Add account" to sign in.' }))
 }
 
@@ -577,7 +634,7 @@ function renderGroups () {
 
 async function refreshGroups () {
   if ($('group').hidden) return
-  groups = await (await fetch('/api/groups')).json()
+  groups = await (await get('/api/groups')).json()
   renderGroups()
 }
 
@@ -627,32 +684,89 @@ document.addEventListener('focusin', e => { if (typing(e.target)) releaseKeys() 
 // ----- data -----
 
 async function refresh () {
-  summary = await (await fetch('/api/summary')).json()
+  summary = await (await get('/api/summary')).json()
   renderSummary()
 }
 
 async function refreshDetail (scrollChat) {
   const id = currentId
   if (!id) return
-  const res = await fetch('/api/detail?id=' + encodeURIComponent(id))
+  const res = await get('/api/detail?id=' + encodeURIComponent(id))
   if (res.ok && id === currentId) renderDetail(await res.json(), scrollChat)
 }
 
 $('add-account').onclick = () => run('addAccount').then(refresh)
 
-$('open-quit').onclick = () => {
+// ----- login and users -----
+
+$('logout').onclick = () => post('/api/logout').then(() => location.replace('/login')).catch(err => showError(err.message))
+
+$('open-password').onclick = () => {
   releaseKeys()
-  $('quit-dialog').showModal()
-}
-$('quit-confirm').onclick = () => {
-  run('quit').then(() => {
-    events.close()
-    $('quit-dialog').close()
-    document.body.replaceChildren(el('p', { style: 'padding:16px', textContent: 'AFK Client has stopped and every account is disconnected. You can close this tab.' }))
-  })
+  $('password-form').reset()
+  $('password-error').textContent = ''
+  $('password-dialog').showModal()
 }
 
+$('password-form').onsubmit = e => {
+  e.preventDefault()
+  post('/api/password', { current: $('password-current').value, next: $('password-next').value })
+    .then(() => location.replace('/login')) // every session of this user ended
+    .catch(err => { $('password-error').textContent = err.message })
+}
+
+let userToRemove = null
+const userAction = (name, body) => act(name, body).then(refreshUsers).catch(err => { $('users-error').textContent = err.message })
+
+async function refreshUsers () {
+  const list = await (await get('/api/users')).json()
+  $('users-list').replaceChildren(...list.map(user => {
+    const password = el('input', { type: 'password', placeholder: 'New password', ariaLabel: 'New password for ' + user.name, autocomplete: 'new-password', minLength: 8, maxLength: 200, className: 'grow' })
+    return el('div', { className: 'user-row' },
+      el('div', { className: 'row spread' },
+        el('strong', { textContent: user.name + (user.admin ? ' (admin)' : '') }),
+        el('label', {}, `${user.accounts} accounts, max `, el('input', { type: 'number', min: 0, max: 100, value: user.maxAccounts, ariaLabel: 'Max accounts for ' + user.name, onchange: e => userAction('setUserMax', { id: user.id, maxAccounts: e.target.valueAsNumber }) }))),
+      el('div', { className: 'row', style: 'margin-top:6px' },
+        password,
+        el('button', { textContent: 'Set password', onclick: () => userAction('setUserPassword', { id: user.id, password: password.value }) }),
+        user.id === me.id
+          ? null
+          : el('button', { className: 'danger', textContent: 'Remove', onclick: () => {
+            userToRemove = user
+            $('remove-user-title').textContent = `Remove ${user.name}?`
+            $('remove-user-dialog').showModal()
+          } })))
+  }))
+}
+
+$('open-users').onclick = () => {
+  releaseKeys()
+  $('users-error').textContent = ''
+  refreshUsers().then(() => $('users-dialog').showModal()).catch(err => showError(err.message))
+}
+
+$('new-user-form').onsubmit = e => {
+  e.preventDefault()
+  $('users-error').textContent = ''
+  act('createUser', { name: $('new-user-name').value, password: $('new-user-password').value, maxAccounts: $('new-user-max').valueAsNumber })
+    .then(() => { $('new-user-form').reset(); return refreshUsers() })
+    .catch(err => { $('users-error').textContent = err.message })
+}
+
+$('remove-user-confirm').onclick = () => {
+  $('remove-user-dialog').close()
+  userAction('removeUser', { id: userToRemove.id })
+}
+
+let me = {}
+get('/api/me').then(res => res.json()).then(user => {
+  me = user
+  $('who').textContent = user.name
+  $('open-users').hidden = !user.admin
+}).catch(() => {})
+
 const events = new EventSource('/events')
+events.onerror = () => refresh().catch(() => {}) // a 401 here sends an ended session to the login page
 events.onmessage = e => {
   const ids = JSON.parse(e.data)
   refresh()

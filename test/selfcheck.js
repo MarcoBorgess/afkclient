@@ -8,10 +8,13 @@ const mc = require('minecraft-protocol')
 const nbt = require('prismarine-nbt')
 const { computeChatChecksum } = require('minecraft-protocol/src/datatypes/checksums')
 const { Manager, VERSION, belowShown, blocksReconnect, fillAmounts, parseSteps, showsAddress, chatLine, toSignedByte, windowChecksum, isNetworkError, nextDelay, parseAddress } = require('../src/bots')
-const { isAllowedRequest } = require('../src/server')
+const { isAllowedRequest, startServer } = require('../src/server')
 const { createTokenStore } = require('../src/tokenCache')
+const { Users } = require('../src/users')
 
 const PORT = 25598
+const WEB_PORT = 25597
+const TOKEN_KEY = 'a-test-key-with-at-least-32-characters'
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms))
 async function until (what, test, ms = 15000) {
   const end = Date.now() + ms
@@ -92,27 +95,156 @@ function groupRules () {
 
 function requestChecks () {
   const req = (method, headers) => ({ method, headers })
-  const host = '127.0.0.1:1'
+  const hosts = ['afk.example.com']
   const json = 'application/json'
-  assert(isAllowedRequest(req('GET', { host }), 1))
-  assert(isAllowedRequest(req('POST', { host, origin: 'http://127.0.0.1:1', 'content-type': json }), 1))
-  assert(!isAllowedRequest(req('GET', { host: 'evil.com:1' }), 1), 'DNS rebinding')
-  assert(!isAllowedRequest(req('POST', { host, origin: 'http://evil.com', 'content-type': json }), 1), 'other website')
-  assert(!isAllowedRequest(req('POST', { host, 'content-type': json }), 1), 'no origin')
-  assert(!isAllowedRequest(req('POST', { host, origin: 'http://127.0.0.1:1', 'content-type': 'text/plain' }), 1), 'form post')
+  const origin = 'https://afk.example.com'
+  assert(isAllowedRequest(req('GET', {}), hosts))
+  assert(isAllowedRequest(req('POST', { origin, 'content-type': json }), hosts))
+  assert(!isAllowedRequest(req('POST', { origin: 'https://evil.com', 'content-type': json }), hosts), 'other website')
+  assert(!isAllowedRequest(req('POST', { origin: 'https://afk.example.com.evil.com', 'content-type': json }), hosts), 'lookalike website')
+  assert(!isAllowedRequest(req('POST', { 'content-type': json }), hosts), 'no origin')
+  assert(!isAllowedRequest(req('POST', { origin, 'content-type': 'text/plain' }), hosts), 'form post')
 }
 
 async function tokens (dir) {
-  const store = createTokenStore(dir)
+  const store = createTokenStore(dir, TOKEN_KEY)
   const cache = store.factory({ username: 'acct', cacheName: 'live' })
   assert.deepEqual(await cache.getCached(), {})
   await cache.setCachedPartial({ secret: 'super-secret-token' })
   const [file] = fs.readdirSync(dir)
-  assert(!fs.readFileSync(path.join(dir, file), 'utf8').includes('super-secret-token'), 'token stored in plain text')
-  const fresh = createTokenStore(dir).factory({ username: 'acct', cacheName: 'live' })
+  assert(!Buffer.from(fs.readFileSync(path.join(dir, file), 'utf8'), 'base64').includes('super-secret-token'), 'token stored in plain text')
+  const fresh = createTokenStore(dir, TOKEN_KEY).factory({ username: 'acct', cacheName: 'live' })
   assert.deepEqual(await fresh.getCached(), { secret: 'super-secret-token' })
+  const wrongKey = createTokenStore(dir, TOKEN_KEY + 'x').factory({ username: 'acct', cacheName: 'live' })
+  assert.deepEqual(await wrongKey.getCached(), {}, 'another key reads nothing')
   await store.remove('acct')
   assert.equal(fs.readdirSync(dir).length, 0)
+}
+
+async function multiUser (dataDir) {
+  const options = { dataDir, tokenKey: TOKEN_KEY, adminName: 'Boss', adminPassword: 'boss-password' }
+  assert.throws(() => new Users({ dataDir, tokenKey: TOKEN_KEY }), /ADMIN_USER/, 'first start needs an admin')
+  const uuids = ['uuid-1', 'uuid-2', 'uuid-3', 'uuid-1']
+  class FakeFlow {
+    getMinecraftJavaToken () {
+      const id = uuids.shift()
+      return Promise.resolve({ profile: { id, name: 'Player' + id.slice(-1) } })
+    }
+  }
+  const users = new Users({ ...options, managerOptions: { flow: FakeFlow } })
+  const host = `127.0.0.1:${WEB_PORT}`
+  const server = startServer(users, { port: WEB_PORT, allowedHosts: [host] })
+  await new Promise(resolve => server.on('listening', resolve))
+
+  const call = async (method, url, cookie, body) => {
+    const headers = { ...(cookie ? { cookie } : {}), ...(method === 'POST' ? { origin: `http://${host}`, 'content-type': 'application/json' } : {}) }
+    const res = await fetch(`http://${host}${url}`, { method, headers, redirect: 'manual', body: method === 'POST' ? JSON.stringify(body ?? {}) : undefined })
+    const text = await res.text()
+    let data = text
+    try { data = JSON.parse(text) } catch {}
+    return { status: res.status, data, cookie: res.headers.get('set-cookie')?.split(';')[0], setCookie: res.headers.get('set-cookie') }
+  }
+  const login = async (name, password) => (await call('POST', '/api/login', null, { name, password })).cookie
+
+  // Nothing but the login page without a session.
+  const home = await call('GET', '/')
+  assert.equal(home.status, 302)
+  assert.equal((await call('GET', '/login')).status, 200)
+  for (const url of ['/api/summary', '/api/groups', '/api/users', '/events', '/api/detail?id=x']) assert.equal((await call('GET', url)).status, 401, url)
+  assert.equal((await call('POST', '/api/action/addAccount')).status, 401)
+  assert.equal((await call('POST', '/api/login', null, { name: 'boss', password: 'wrong-password' })).status, 401)
+  assert.equal((await call('POST', '/api/login', null, { name: 'nobody', password: 'wrong-password' })).status, 401)
+  assert.equal((await fetch(`http://${host}/api/login`, { method: 'POST', headers: { origin: 'https://evil.com', 'content-type': 'application/json' }, body: '{}' })).status, 403)
+
+  const boss = await login('BOSS', 'boss-password')
+  assert(boss, 'names ignore case')
+  const signed = await call('POST', '/api/login', null, { name: 'boss', password: 'boss-password' })
+  assert(/HttpOnly/.test(signed.setCookie) && /SameSite=Lax/.test(signed.setCookie))
+  assert.equal((await call('GET', '/api/me', boss)).data.admin, true)
+  assert.equal(fs.readFileSync(path.join(dataDir, 'users.json'), 'utf8').includes('boss-password'), false, 'password stored in plain text')
+
+  // Admin only.
+  const admin = (name, body) => call('POST', '/api/action/' + name, boss, body)
+  assert.match((await admin('createUser', { name: 'a b', password: 'long-enough', maxAccounts: 1 })).data.error, /username/)
+  assert.match((await admin('createUser', { name: 'ann', password: 'short', maxAccounts: 1 })).data.error, /password/)
+  assert.match((await admin('createUser', { name: 'ann', password: 'long-enough', maxAccounts: -1 })).data.error, /limit/)
+  assert.equal((await admin('createUser', { name: 'ann', password: 'ann-password', maxAccounts: 1 })).status, 200)
+  assert.equal((await admin('createUser', { name: 'bob', password: 'bob-password', maxAccounts: 2 })).status, 200)
+  assert.match((await admin('createUser', { name: 'ANN', password: 'ann-password', maxAccounts: 1 })).data.error, /already exists/)
+  const ann = await login('ann', 'ann-password')
+  const bob = await login('bob', 'bob-password')
+  assert.equal((await call('GET', '/api/me', ann)).data.admin, false)
+  assert.equal((await call('GET', '/api/users', ann)).status, 403)
+  for (const name of ['createUser', 'setUserMax', 'setUserPassword', 'removeUser']) assert.equal((await call('POST', '/api/action/' + name, ann, {})).status, 403, name)
+  assert.equal((await call('POST', '/api/action/quit', boss)).status, 404, 'nobody stops the app from the page')
+
+  // Limits and sign-in stay per user; one Minecraft account has one user.
+  const summary = async cookie => (await call('GET', '/api/summary', cookie)).data
+  const add = async cookie => {
+    const result = await call('POST', '/api/action/addAccount', cookie)
+    await wait(50)
+    return result
+  }
+  assert.equal((await add(ann)).status, 200)
+  assert.equal((await summary(ann)).accounts[0].name, 'Player1')
+  assert.equal((await summary(ann)).maxAccounts, 1)
+  assert.match((await add(ann)).data.error, /limit is 1/)
+  assert.equal((await add(bob)).status, 200)
+  assert.equal((await summary(bob)).accounts[0].name, 'Player2')
+  assert.equal((await admin('setUserMax', { id: users.overview().find(u => u.name === 'bob').id, maxAccounts: 3 })).status, 200)
+  assert.equal((await add(bob)).status, 200)
+  assert.equal((await summary(bob)).accounts.length, 2)
+  await add(bob)
+  assert.match((await summary(bob)).signIn.error, /already added/, 'account already on another user')
+  assert.equal((await summary(bob)).accounts.length, 2)
+
+  // Another user's ids and settings don't exist for you.
+  const annAccount = (await summary(ann)).accounts[0]
+  const bobAccount = (await summary(bob)).accounts[0]
+  assert.equal((await call('POST', '/api/action/addServer', bob, { accountId: annAccount.id, address: 'x.example.com' })).status, 400)
+  assert.equal((await call('POST', '/api/action/removeAccount', bob, { id: annAccount.id })).status, 400)
+  assert.equal((await call('POST', '/api/action/addServer', ann, { accountId: annAccount.id, address: 'shared.example.com', autoConnect: false })).status, 200)
+  assert.equal((await call('POST', '/api/action/addServer', bob, { accountId: bobAccount.id, address: 'shared.example.com', autoConnect: false })).status, 200)
+  const serverId = (await summary(ann)).accounts[0].servers[0].id
+  for (const name of ['connect', 'disconnect', 'removeServer', 'send', 'closeMenu']) assert.equal((await call('POST', '/api/action/' + name, bob, { id: serverId, text: 'x' })).status, 400, name)
+  assert.equal((await call('GET', '/api/detail?id=' + serverId, bob)).status, 400)
+  assert.equal((await call('GET', '/api/detail?id=' + serverId, ann)).status, 200)
+  const address = 'shared.example.com:25565'
+  assert.equal((await call('POST', '/api/action/setLobbyCommand', ann, { address, value: '/join ann' })).status, 200)
+  assert.equal((await summary(bob)).accounts[0].servers[0].lobbyCommand, '', 'lobby command per user')
+  const annManager = users.manager(users.overview().find(u => u.name === 'ann').id)
+  const bobManager = users.manager(users.overview().find(u => u.name === 'bob').id)
+  annManager.setButtons(address, [{ label: 'Ann', steps: '/ann' }])
+  assert.deepEqual(bobManager.settings(address).buttons, [], 'buttons per user')
+
+  // Passwords: the old one and its sessions stop working.
+  assert.match((await call('POST', '/api/password', bob, { current: 'wrong-password', next: 'bob-password-2' })).data.error, /current password/)
+  assert.match((await call('POST', '/api/password', bob, { current: 'bob-password', next: 'short' })).data.error, /password/)
+  assert.equal((await call('POST', '/api/password', bob, { current: 'bob-password', next: 'bob-password-2' })).status, 200)
+  assert.equal((await call('GET', '/api/me', bob)).status, 401)
+  assert.equal((await call('POST', '/api/login', null, { name: 'bob', password: 'bob-password' })).status, 401)
+  const bob2 = await login('bob', 'bob-password-2')
+  assert(bob2)
+  assert.equal((await call('POST', '/api/logout', bob2)).status, 200)
+  assert.equal((await call('GET', '/api/me', bob2)).status, 401)
+
+  // Too many wrong passwords lock that name only.
+  for (let i = 0; i < 5; i++) assert.equal((await call('POST', '/api/login', null, { name: 'ann', password: 'wrong-password' })).status, 401)
+  assert.equal((await call('POST', '/api/login', null, { name: 'ann', password: 'ann-password' })).status, 429, 'even the right password')
+  assert(await login('boss', 'boss-password'))
+
+  // Everything survives a restart, and a removed user leaves nothing behind.
+  const again = new Users({ ...options, managerOptions: { flow: FakeFlow } })
+  assert.deepEqual(again.overview().map(u => [u.name, u.accounts]), [['boss', 0], ['ann', 1], ['bob', 2]])
+  assert.deepEqual(again.manager(again.overview()[1].id).settings(address).buttons, [{ label: 'Ann', steps: '/ann' }])
+  const annId = users.overview().find(u => u.name === 'ann').id
+  const bossId = users.overview().find(u => u.name === 'boss').id
+  assert.match((await admin('removeUser', { id: bossId })).data.error, /yourself/)
+  assert.equal((await admin('removeUser', { id: annId })).status, 200)
+  assert.equal((await call('GET', '/api/me', ann)).status, 401)
+  assert(!fs.existsSync(path.join(dataDir, 'users', annId)), 'saved logins deleted')
+  server.closeAllConnections()
+  server.close()
 }
 
 function fakeServer () {
@@ -369,6 +501,7 @@ async function main () {
     groupRules(); console.log('ok  scoreboard amounts and button steps')
     requestChecks(); console.log('ok  request checks')
     await tokens(path.join(root, 'tokens')); console.log('ok  encrypted token round trip')
+    await multiUser(path.join(root, 'site')); console.log('ok  login, admin, account limits, users kept apart')
     await endToEnd(path.join(root, 'data')); console.log('ok  connect, chat, commands, menu click, controls, reconnect rules')
   } finally {
     fs.rmSync(root, { recursive: true, force: true })

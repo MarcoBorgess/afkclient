@@ -1,47 +1,46 @@
-const { spawn } = require('child_process')
-const fs = require('fs')
 const path = require('path')
-const { Manager } = require('./bots')
 const { startServer } = require('./server')
-const { createTokenStore } = require('./tokenCache')
+const { Users } = require('./users')
 
-const PORT = 25599
-const URL = `http://127.0.0.1:${PORT}/`
-const dataDir = path.join(process.env.LOCALAPPDATA, 'afkclient')
+const PORT = Number(process.env.PORT ?? 25599)
+const HOST = process.env.HOST ?? '127.0.0.1'
+const LOCAL = HOST === '127.0.0.1'
+const allowedHosts = process.env.PUBLIC_HOSTS?.split(',').map(host => host.trim().toLowerCase()).filter(Boolean) ??
+  (LOCAL ? [`127.0.0.1:${PORT}`, `localhost:${PORT}`] : null)
 
-// Started from start.bat: relaunch with no console window, then let the bat close.
-if (!process.argv.includes('--background')) {
-  fs.mkdirSync(dataDir, { recursive: true })
-  const log = fs.openSync(path.join(dataDir, 'app.log'), 'a') // with no console, this is the only trace of a failure
-  spawn(process.execPath, [__filename, '--background'], { detached: true, stdio: ['ignore', log, log], windowsHide: true }).unref()
-  process.exit(0)
+function stop (message) {
+  console.error(`${new Date().toISOString()} ${message}`)
+  process.exit(1)
 }
 
-const openPage = () => spawn('cmd', ['/c', 'start', '', URL], { detached: true, stdio: 'ignore', windowsHide: true }).unref()
+if (!allowedHosts?.length) stop('Set PUBLIC_HOSTS to the address of this site, for example afkparmegio.squareweb.app')
+if ((process.env.TOKEN_KEY ?? '').length < 32) stop('Set TOKEN_KEY to a random value of at least 32 characters')
 
-const manager = new Manager({ dataDir, tokens: createTokenStore(path.join(dataDir, 'tokens')) })
+let users
+try {
+  users = new Users({
+    dataDir: process.env.DATA_DIR ?? path.join(__dirname, '..', 'data'),
+    tokenKey: process.env.TOKEN_KEY,
+    adminName: process.env.ADMIN_USER,
+    adminPassword: process.env.ADMIN_PASSWORD
+  })
+} catch (err) {
+  stop(err.message)
+}
 
 function quit () {
-  manager.shutdown()
-  setTimeout(() => process.exit(0), 500) // lets the disconnect packets and the page's reply go out
+  users.shutdown()
+  setTimeout(() => process.exit(0), 500) // lets the disconnect packets go out
 }
 
-const server = startServer(manager, PORT, quit)
+const server = startServer(users, { port: PORT, host: HOST, allowedHosts, secure: !LOCAL })
 
-server.on('error', err => {
-  // Already running: double-clicking again just reopens the page, and the new copy must not connect too.
-  if (err.code === 'EADDRINUSE') {
-    openPage()
-    process.exit(0)
-  }
-  throw err
-})
 server.on('listening', () => {
-  console.log(`${new Date().toISOString()} AFK Client is running at ${URL}`)
-  openPage()
-  manager.autoConnectAll()
+  console.log(`${new Date().toISOString()} AFK Client is running on ${HOST}:${PORT}`)
+  users.autoConnectAll()
 })
 
 // One bad packet from one server must not drop every other account.
 process.on('uncaughtException', err => console.error(new Date().toISOString(), 'Unexpected error:', err))
 process.on('SIGINT', quit)
+process.on('SIGTERM', quit)

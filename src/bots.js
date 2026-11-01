@@ -264,10 +264,12 @@ function parseSteps (text) {
 const namedIn = (steps, name) => steps.some(step => step.type === 'send' && new RegExp(`\\b${name.replace(/\W/g, '')}\\b`, 'i').test(step.text))
 
 class Manager extends EventEmitter {
-  constructor ({ dataDir, tokens, botOptions = {}, flow = Authflow, addressGrace = ADDRESS_GRACE }) {
+  constructor ({ dataDir, tokens, botOptions = {}, flow = Authflow, addressGrace = ADDRESS_GRACE, maxAccounts = () => Infinity, isTaken = () => false }) {
     super()
     this.configFile = path.join(dataDir, 'config.json')
     this.tokens = tokens
+    this.maxAccounts = maxAccounts
+    this.isTaken = isTaken
     this.botOptions = botOptions
     this.flow = flow
     this.addressGrace = addressGrace
@@ -299,11 +301,17 @@ class Manager extends EventEmitter {
 
   // ----- accounts and servers -----
 
-  async addAccount () {
+  // Not async: the page's request must get these refusals, the sign-in itself finishes later.
+  addAccount () {
     if (this.signIn?.state === 'waiting') throw new Error('Another sign-in is already in progress')
+    if (this.config.accounts.length >= this.maxAccounts()) throw new Error(`Your limit is ${this.maxAccounts()} accounts`)
     const id = randomUUID()
     this.signIn = { state: 'waiting', code: null, url: null, error: null }
     this.emit('changed')
+    return this.finishSignIn(id)
+  }
+
+  async finishSignIn (id) {
     try {
       const flow = new this.flow(id, this.tokens.factory, { authTitle: Titles.MinecraftNintendoSwitch, deviceType: 'Nintendo', flow: 'live' }, code => {
         this.signIn.code = code.user_code
@@ -312,7 +320,8 @@ class Manager extends EventEmitter {
       })
       const { profile } = await flow.getMinecraftJavaToken({ fetchProfile: true })
       if (!profile?.name) throw new Error('This Microsoft account does not own Minecraft')
-      if (this.config.accounts.some(a => a.uuid === profile.id)) throw new Error(`${profile.name} is already added`)
+      // Two users on one account would kick each other off the server forever.
+      if (this.isTaken(profile.id) || this.config.accounts.some(a => a.uuid === profile.id)) throw new Error(`${profile.name} is already added`)
       this.config.accounts.push({ id, name: profile.name, uuid: profile.id, servers: [] })
       this.signIn = null
       this.save()
@@ -735,6 +744,7 @@ class Manager extends EventEmitter {
   summary () {
     return {
       signIn: this.signIn,
+      maxAccounts: this.maxAccounts(),
       accounts: this.config.accounts.map(account => ({
         id: account.id,
         name: account.name,

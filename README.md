@@ -1,20 +1,36 @@
 # AFK Client
 
-Keeps Minecraft Java accounts online without running the game, controlled from a page in your browser. Runs several accounts on several servers at once.
+Keeps Minecraft Java accounts online without running the game, controlled from a website. Several people log in, each with their own accounts, buttons and settings. Connects as Minecraft 1.21.11, so the server must accept that version.
 
-Windows only: saved logins are encrypted with Windows DPAPI. Connects as Minecraft 1.21.11, so the server must accept that version.
+The version that runs on one Windows PC with no login is on the `local-windows` branch.
 
-## Run it
+## Host it on Square Cloud
+
+The app reads these environment variables:
+
+| Variable | Value |
+|---|---|
+| `TOKEN_KEY` | Random secret that encrypts the saved Microsoft logins. Changing it makes every account sign in again. Generate one with `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"` |
+| `PUBLIC_HOSTS` | The site's address, comma separated, without `https://`. For example `afkparmegio.squareweb.app,afk.parmegio.com` |
+| `ADMIN_USER` | Name of the first user, created on the first start |
+| `ADMIN_PASSWORD` | That user's password, at least 8 characters. Delete this variable after the first login |
+
+Settings are in `squarecloud.app`. Data is stored in the `data` folder.
+
+## Run it on your computer
 
 Needs [Node.js](https://nodejs.org) 22 or newer.
 
 ```
 npm install
+TOKEN_KEY=any-value-with-at-least-32-characters ADMIN_USER=admin ADMIN_PASSWORD=change-this-now npm start
 ```
 
-Then double-click `start.bat`. The page opens at http://127.0.0.1:25599. Closing the tab keeps the accounts online; use **Quit** on the page to stop.
+Then open http://127.0.0.1:25599.
 
-Logins and settings are stored in `%LOCALAPPDATA%\afkclient`, not in this folder. The page only accepts connections from your own computer.
+## Users
+
+The admin opens **Users** to create people, set how many accounts each can add, reset passwords and remove users. Removing a user deletes their saved logins. A Minecraft account can only belong to one user.
 
 ## What it does
 
@@ -27,7 +43,7 @@ Logins and settings are stored in `%LOCALAPPDATA%\afkclient`, not in this folder
 
 ## Group buttons
 
-Buttons belong to a server. A button is a list of steps, one per line:
+Buttons belong to a user and a server. A button is a list of steps, one per line:
 
 | Step | What it does |
 |---|---|
