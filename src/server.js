@@ -21,9 +21,6 @@ function isAllowedRequest ({ method, headers }, allowedOrigins) {
   return allowedOrigins.includes(headers.origin.toLowerCase())
 }
 
-// Set by Cloudflare, in front of the site. Without it every visitor counts as the proxy, which only makes the login limit stricter.
-const clientIp = req => String(req.headers['cf-connecting-ip'] ?? req.socket.remoteAddress).slice(0, 64)
-
 function readJson (req) {
   return new Promise((resolve, reject) => {
     let size = 0
@@ -131,7 +128,7 @@ function startServer (users, { port, host = '127.0.0.1', allowedHosts, secure = 
       if (req.method === 'GET' && /^\/cat-(cream|tabby)\.png$/.test(url.pathname)) return file(url.pathname.slice(1), 'image/png')
       if (req.method === 'POST' && url.pathname === '/api/login') {
         const { name, password } = await readJson(req)
-        const token = await users.login(name, password, clientIp(req))
+        const token = await users.login(name, password)
         return json(200, {}, { 'Set-Cookie': `${COOKIE}=${token}; Max-Age=${COOKIE_LIFE}; ${cookie}` })
       }
 
