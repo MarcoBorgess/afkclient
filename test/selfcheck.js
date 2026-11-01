@@ -401,16 +401,41 @@ async function endToEnd (dataDir) {
 
   // A map's picture, whole or in pieces; icon-only updates change nothing.
   const pixelsOf = map => Buffer.from(map.pixels, 'base64')
+  const newest = () => manager.maps(id).loose
   sc.write('map', { itemDamage: 7, scale: 0, locked: true, columns: 128, rows: 128, x: 0, y: 0, data: Buffer.alloc(16384, 34) })
-  await until('map picture', () => manager.detail(id).maps.length === 1)
+  await until('map picture', () => newest().length === 1)
   sc.write('map', { itemDamage: 7, scale: 0, locked: true, columns: 2, rows: 1, x: 10, y: 3, data: Buffer.from([50, 51]) })
-  await until('map update', () => pixelsOf(manager.detail(id).maps[0])[3 * 128 + 11] === 51)
-  assert.equal(pixelsOf(manager.detail(id).maps[0])[3 * 128 + 10], 50)
-  assert.equal(pixelsOf(manager.detail(id).maps[0])[3 * 128 + 12], 34, 'the rest stays')
+  await until('map update', () => pixelsOf(newest()[0])[3 * 128 + 11] === 51)
+  assert.equal(pixelsOf(newest()[0])[3 * 128 + 10], 50)
+  assert.equal(pixelsOf(newest()[0])[3 * 128 + 12], 34, 'the rest stays')
   sc.write('map', { itemDamage: 7, scale: 0, locked: true, columns: 0 })
   for (let n = 1; n <= 4; n++) sc.write('map', { itemDamage: n, scale: 0, locked: true, columns: 1, rows: 1, x: 0, y: 0, data: Buffer.from([n]) })
-  await until('newest maps only', () => manager.detail(id).maps[0].id === 4)
-  assert.deepEqual(manager.detail(id).maps.map(m => m.id), [4, 3, 2, 1], 'newest first, oldest dropped')
+  await until('newest maps', () => newest()[0]?.id === 4)
+  assert.deepEqual(newest().map(m => m.id), [4, 3, 2, 1, 7], 'newest first')
+  assert.equal(manager.maps(id).wall, null)
+  for (let n = 10; n < 20; n++) sc.write('map', { itemDamage: n, scale: 0, locked: true, columns: 1, rows: 1, x: 0, y: 0, data: Buffer.from([n]) })
+  await until('more maps', () => newest()[0]?.id === 19)
+
+  // The captcha wall: 5 by 2 framed maps seen looking south, so higher x is on the left.
+  const frameType = require('minecraft-data')(VERSION).entitiesByName.item_frame.id
+  const mapItem = mapId => ({ itemCount: 1, itemId: require('minecraft-data')(VERSION).itemsByName.filled_map.id, addedComponentCount: 1, removedComponentCount: 0, components: [{ type: 'map_id', data: mapId }], removeComponents: [] })
+  const hang = (entityId, x, y, direction, mapId) => {
+    sc.write('spawn_entity', { entityId, objectUUID: '00000000-0000-0000-0000-' + String(entityId).padStart(12, '0'), type: frameType, x, y, z: 5.97, velocity: { x: 0, y: 0, z: 0 }, pitch: 0, yaw: 0, headPitch: 0, objectData: direction })
+    sc.write('entity_metadata', { entityId, metadata: [{ key: 9, type: 'item_stack', value: mapItem(mapId) }] })
+  }
+  let tile = 10
+  for (const y of [22, 21]) for (const x of [2, 1, 0, -1, -2]) hang(1000 + tile, x + 0.5, y + 0.5, 2, tile++)
+  hang(1100, 40.5, 64.5, 4, 1) // a stray frame elsewhere must not stretch the picture
+  await until('wall of maps', () => manager.maps(id).wall?.tiles.length === 10)
+  const { wall, loose } = manager.maps(id)
+  const place = tileId => { const t = wall.tiles.find(t => t.id === tileId); return [t.column, t.row] }
+  assert.deepEqual([wall.columns, wall.rows], [5, 2])
+  assert.deepEqual(place(10), [0, 0])
+  assert.deepEqual(place(14), [4, 0])
+  assert.deepEqual(place(19), [4, 1])
+  assert(!loose.some(m => m.id === 10), 'a framed map is not shown twice')
+  sc.write('entity_destroy', { entityIds: [1010] })
+  await until('frame removed', () => manager.maps(id).wall.tiles.length === 9)
 
   // A deleted message must not wipe the tracking counters.
   const client = conn.bot._client
@@ -432,7 +457,7 @@ async function endToEnd (dataDir) {
   assert.equal(client._lastSeenMessages.pending, 0)
   assert.equal(conn.status, 'online')
   assert.equal(manager.detail(id).sidebar, null, 'sidebar cleared by a server switch')
-  assert.deepEqual(manager.detail(id).maps, [], 'maps cleared by a server switch')
+  assert.deepEqual(manager.maps(id), { wall: null, loose: [] }, 'maps cleared by a server switch')
 
   await rewardsAndPayments(manager, id, conn, server, address, clicks, chats)
 

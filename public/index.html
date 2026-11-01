@@ -27,7 +27,7 @@
   input[type=number] { width: 72px; }
   .user-row { padding: 8px 0; border-bottom: 1px solid var(--line); }
   .maps { display: flex; flex-wrap: wrap; gap: 8px; }
-  .map { width: min(384px, 100%); aspect-ratio: 1; image-rendering: pixelated; background: #14161a; border: 1px solid var(--line); }
+  .map { max-width: 100%; image-rendering: pixelated; background: #14161a; border: 1px solid var(--line); }
   select { background: #14161a; color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px; font: inherit; }
   .field { display: flex; flex-direction: column; gap: 4px; align-items: stretch; }
   .menu { margin: 0; padding: 4px; min-width: 160px; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px; }
@@ -419,7 +419,7 @@ function openView (id) {
       el('h2', { textContent: 'Inventory' }),
       el('div', { id: 'inventory', className: 'grid' }))))
   drawn.delete('sidebar')
-  drawn.delete('maps')
+  drawn.delete('mapsVersion')
   drawn.delete('menu')
   drawn.delete('items')
   drawn.delete('chat')
@@ -488,11 +488,26 @@ function sidebarNodes (sidebar) {
 const MAP_COLORS = '7fb238 f7e9a3 c7c7c7 ff0000 a0a0ff a7a7a7 007c00 ffffff a4a8b8 976d4d 707070 4040ff 8f7748 fffcf5 d87f33 b24cd8 6699d8 e5e533 7fcc19 f27fa5 4c4c4c 999999 4c7f99 7f3fb2 334cb2 664c33 667f33 993333 191919 faee4d 5cdbd5 4a80ff 00d93a 815631 700200 d1b1a1 9f5224 95576c 706c8a ba8524 677535 a04d4e 392923 876b62 575c5c 7a4958 4c3e5c 4c3223 4c522a 8e3c2e 251610 bd3031 943f61 5c191d 167e86 3a8e8c 562c3e 14b485 646464 d8af93 7fa796'.split(' ')
 const MAP_SHADES = [180, 220, 255, 135]
 
-function mapNode (map) {
-  const canvas = el('canvas', { className: 'map', width: 128, height: 128, role: 'img', ariaLabel: 'Map ' + map.id })
+function mapCanvas (columns, rows, tiles, label) {
+  const canvas = el('canvas', { className: 'map', width: columns * 128, height: rows * 128, role: 'img', ariaLabel: label, style: `width:${columns * 192}px` })
   const context = canvas.getContext('2d')
+  for (const tile of tiles) context.putImageData(mapImage(context, tile.pixels), (tile.column ?? 0) * 128, (tile.row ?? 0) * 128)
+  return canvas
+}
+
+async function refreshMaps (id) {
+  const res = await get('/api/maps?id=' + encodeURIComponent(id))
+  if (!res.ok || id !== currentId) return
+  const { wall, loose } = await res.json()
+  $('maps-card').hidden = !wall && !loose.length
+  $('maps').replaceChildren(
+    ...(wall ? [mapCanvas(wall.columns, wall.rows, wall.tiles, 'Wall of maps')] : []),
+    ...loose.map(map => mapCanvas(1, 1, [map], 'Map ' + map.id)))
+}
+
+function mapImage (context, encoded) {
   const image = context.createImageData(128, 128)
-  const pixels = Uint8Array.from(atob(map.pixels), c => c.charCodeAt(0))
+  const pixels = Uint8Array.from(atob(encoded), c => c.charCodeAt(0))
   pixels.forEach((value, i) => {
     const color = MAP_COLORS[(value >> 2) - 1]
     if (!color) return // transparent
@@ -500,8 +515,7 @@ function mapNode (map) {
     for (let c = 0; c < 3; c++) image.data[i * 4 + c] = Math.floor(parseInt(color.slice(c * 2, c * 2 + 2), 16) * shade / 255)
     image.data[i * 4 + 3] = 255
   })
-  context.putImageData(image, 0, 0)
-  return canvas
+  return image
 }
 
 function renderDetail (d, scrollChat) {
@@ -522,10 +536,7 @@ function renderDetail (d, scrollChat) {
     $('scoreboard').replaceChildren(...sidebarNodes(d.sidebar))
   }
 
-  if (changed('maps', [d.id, d.maps])) {
-    $('maps-card').hidden = !d.maps.length
-    $('maps').replaceChildren(...d.maps.map(mapNode))
-  }
+  if (changed('mapsVersion', [d.id, d.mapsVersion])) refreshMaps(d.id)
 
   const card = $('menu-card')
   if (!changed('menu', [d.id, d.menu])) {

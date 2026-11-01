@@ -156,6 +156,7 @@ function startServer (users, { port, host = '127.0.0.1', allowedHosts, secure = 
       if (req.method === 'GET' && url.pathname === '/api/summary') return json(200, manager.summary())
       if (req.method === 'GET' && url.pathname === '/api/groups') return json(200, manager.groups())
       if (req.method === 'GET' && url.pathname === '/api/detail') return json(200, manager.detail(url.searchParams.get('id')))
+      if (req.method === 'GET' && url.pathname === '/api/maps') return json(200, manager.maps(url.searchParams.get('id')))
       if (req.method === 'GET' && url.pathname === '/api/users') {
         return user.admin ? json(200, users.overview()) : json(403, { error: 'Forbidden' })
       }

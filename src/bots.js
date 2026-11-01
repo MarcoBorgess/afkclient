@@ -9,7 +9,8 @@ const { computeChatChecksum } = require('minecraft-protocol/src/datatypes/checks
 
 // Change this one value to move to a newer Minecraft once mineflayer supports it.
 const VERSION = '1.21.11'
-const ChatMessage = require('prismarine-chat')(require('prismarine-registry')(VERSION))
+const registry = require('prismarine-registry')(VERSION)
+const ChatMessage = require('prismarine-chat')(registry)
 
 const FIRST_DELAY = 5000
 const MAX_DELAY = 300000
@@ -29,7 +30,10 @@ const DRAIN_GAP = 6000 // servers like Cobblestone refuse a second payment withi
 const MAX_PAYMENTS = 5
 const STAGGER = 1000
 const MAP_SIZE = 128
-const MAX_MAPS = 4
+const MAX_MAPS = 16
+const FRAME_TYPES = [registry.entitiesByName.item_frame.id, registry.entitiesByName.glow_item_frame.id]
+// For each direction a frame can face: its axis along the wall, which way a viewer's right is, and the wall's depth axis.
+const WALL_AXES = { 2: ['x', -1, 'z'], 3: ['x', 1, 'z'], 4: ['z', 1, 'x'], 5: ['z', -1, 'x'] }
 const PLACEHOLDER = /\{([a-z0-9_]+)(?:\.(\d+))?\}/gi
 const AMOUNT = /(?<![\d.,])(\d[\d,]*(?:\.\d+)?)([a-z]{0,2})(?![a-z0-9])/g
 
@@ -225,6 +229,31 @@ function updateMap (maps, { itemDamage: id, columns, rows, x, y, data }) {
   maps.set(id, pixels)
   if (maps.size > MAX_MAPS) maps.delete(maps.keys().next().value)
   return true
+}
+
+// Servers build big pictures from a wall of framed maps, so the page needs them in place.
+// shortcut: ignores a frame's rotation, the captcha wall seen so far is upright.
+function mapWall (frames, maps) {
+  const walls = new Map()
+  for (const frame of frames.values()) {
+    const axes = WALL_AXES[frame.direction]
+    if (!axes || !maps.has(frame.mapId)) continue
+    const key = `${frame.direction} ${Math.floor(frame[axes[2]])}`
+    if (!walls.has(key)) walls.set(key, [])
+    walls.get(key).push(frame)
+  }
+  const wall = [...walls.values()].sort((a, b) => b.length - a.length)[0]
+  if (!wall) return null
+  const [axis, sign] = WALL_AXES[wall[0].direction]
+  const column = frame => sign * Math.floor(frame[axis])
+  const row = frame => -Math.floor(frame.y)
+  const left = Math.min(...wall.map(column))
+  const top = Math.min(...wall.map(row))
+  return {
+    columns: Math.max(...wall.map(column)) - left + 1,
+    rows: Math.max(...wall.map(row)) - top + 1,
+    tiles: wall.map(frame => ({ id: frame.mapId, column: column(frame) - left, row: row(frame) - top, pixels: maps.get(frame.mapId).toString('base64') }))
+  }
 }
 
 const sidebarText = line => plainCaps(`${line.text} ${line.number}`)
@@ -498,9 +527,32 @@ class Manager extends EventEmitter {
     fixChatTracking(bot)
     conn.readSidebar = trackSidebar(bot, () => this.emit('changed', conn.server.id))
     conn.maps = new Map()
-    bot._client.on('login', () => conn.maps.clear()) // a server switch leaves the old maps behind
+    conn.frames = new Map()
+    conn.mapsVersion = (conn.mapsVersion ?? 0) + 1
+    const mapsChanged = () => {
+      conn.mapsVersion++
+      this.emit('changed', conn.server.id)
+    }
+    bot._client.on('login', () => { // a server switch leaves the old maps behind
+      conn.maps.clear()
+      conn.frames.clear()
+      mapsChanged()
+    })
     bot._client.on('map', packet => {
-      if (updateMap(conn.maps, packet)) this.emit('changed', conn.server.id)
+      if (updateMap(conn.maps, packet)) mapsChanged()
+    })
+    bot._client.on('spawn_entity', ({ entityId, type, x, y, z, objectData }) => {
+      if (FRAME_TYPES.includes(type)) conn.frames.set(entityId, { x, y, z, direction: objectData, mapId: null })
+    })
+    bot._client.on('entity_metadata', ({ entityId, metadata }) => {
+      const frame = conn.frames.get(entityId)
+      const item = metadata.find(entry => entry.type === 'item_stack')
+      if (!frame || !item) return
+      frame.mapId = item.value?.components?.find(component => component.type === 'map_id')?.data ?? null
+      mapsChanged()
+    })
+    bot._client.on('entity_destroy', ({ entityIds }) => {
+      if (entityIds.map(id => conn.frames.delete(id)).some(Boolean)) mapsChanged()
     })
 
     let finished = false
@@ -798,6 +850,18 @@ class Manager extends EventEmitter {
     return [...groups.values()]
   }
 
+  // Apart from detail(): pictures are large and rarely change, chat and movement would resend them.
+  maps (id) {
+    const conn = this.conn(id)
+    if (conn.status !== 'online' || !conn.bot) return { wall: null, loose: [] }
+    const wall = mapWall(conn.frames, conn.maps)
+    const walled = new Set(wall?.tiles.map(tile => tile.id))
+    return {
+      wall,
+      loose: [...conn.maps].reverse().filter(([mapId]) => !walled.has(mapId)).map(([mapId, pixels]) => ({ id: mapId, pixels: pixels.toString('base64') }))
+    }
+  }
+
   detail (id) {
     const conn = this.conn(id)
     const bot = conn.status === 'online' ? conn.bot : null
@@ -810,7 +874,7 @@ class Manager extends EventEmitter {
       message: conn.message,
       chat: conn.chat,
       sidebar: bot ? conn.readSidebar() : null,
-      maps: bot ? [...conn.maps].reverse().map(([mapId, pixels]) => ({ id: mapId, pixels: pixels.toString('base64') })) : [],
+      mapsVersion: conn.mapsVersion ?? 0,
       menu: window
         ? {
             title: toText(window.title),
