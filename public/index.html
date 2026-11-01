@@ -255,6 +255,7 @@ const run = (name, body) => act(name, body).then(result => {
 function showError (message) { $('notice').textContent = message }
 
 const STATUS = { online: 'Online', connecting: 'Connecting…', reconnecting: 'Reconnecting…', 'needs-signin': 'Needs sign-in', offline: 'Offline' }
+const CAPTCHA = 'Offline - Captcha'
 
 // Redraw only real changes: replacing a button between press and release loses the click.
 const drawn = new Map()
@@ -377,7 +378,7 @@ function renderServer (server) {
   return el('div', { className: 'server' + (server.id === currentId ? ' current' : '') },
     el('div', { className: 'row spread' },
       el('span', { className: 'address', textContent: server.port === 25565 ? server.host : `${server.host}:${server.port}` }),
-      el('span', {}, el('span', { className: server.status, textContent: STATUS[server.status] + (server.where ? ` · ${server.where}` : '') }), ' ', server.retryAt ? el('span', { className: 'note retry', dataset_retry: server.retryAt }) : null, ' ',
+      el('span', {}, el('span', { className: server.captcha ? 'needs-signin' : server.status, textContent: server.captcha ? CAPTCHA : STATUS[server.status] + (server.where ? ` · ${server.where}` : '') }), ' ', server.retryAt ? el('span', { className: 'note retry', dataset_retry: server.retryAt }) : null, ' ',
         el('button', { className: 'dots', textContent: '⋮', ariaLabel: 'Options for ' + server.host, ariaHasPopup: 'menu', onclick: e => openServerMenu(e.currentTarget, server) }))),
     server.code ? el('div', {}, el('a', { href: server.code.url, target: '_blank', rel: 'noreferrer', textContent: server.code.url, style: 'color:inherit' }), el('div', { className: 'code', textContent: server.code.code })) : null,
     server.message ? el('div', { className: 'note', textContent: server.message }) : null,
@@ -523,7 +524,8 @@ function mapImage (context, encoded) {
 
 function renderDetail (d, scrollChat) {
   $('view-title').textContent = `${d.name} on ${d.address}`
-  if (d.status !== 'online') $('view-status').textContent = `${STATUS[d.status]} ${d.message}`
+  if (d.captcha) $('view-status').textContent = `${CAPTCHA}: read the map and answer in chat`
+  else if (d.status !== 'online') $('view-status').textContent = `${STATUS[d.status]} ${d.message}`
   else if ($('view-status').textContent.startsWith(STATUS.offline) || !$('view-status').dataset.ok) { $('view-status').textContent = 'Online'; $('view-status').dataset.ok = 1 }
 
   const chat = $('chat')
@@ -669,7 +671,7 @@ function renderGroups () {
         el('button', { textContent: '+ Add button', onclick: () => openButtonDialog(group.address, group.buttons.length) }))
     }
     node.boards.replaceChildren(...group.accounts.map(account => el('div', { className: 'board' },
-      el('strong', { textContent: account.name }), ' ', el('span', { className: account.status, textContent: STATUS[account.status] }),
+      el('strong', { textContent: account.name }), ' ', el('span', { className: account.captcha ? 'needs-signin' : account.status, textContent: account.captcha ? CAPTCHA : STATUS[account.status] }),
       account.result ? el('div', { className: 'note', textContent: account.result }) : null,
       ...sidebarNodes(account.sidebar))))
   }
