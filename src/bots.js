@@ -268,6 +268,9 @@ function mapWall (frames, maps) {
   }
 }
 
+// Connected but held back: chat answers the captcha, so nothing else may be sent as if it were a command.
+const inCaptcha = conn => conn.status === 'online' && conn.captcha
+
 const sidebarText = line => plainCaps(`${line.text} ${line.number}`)
 
 const inMinehutLobby = sidebar => plainCaps(sidebar?.title ?? '').trim() === 'minehut'
@@ -587,6 +590,13 @@ class Manager extends EventEmitter {
     fixChatTracking(bot)
     const readTrace = traceConnection(bot)
     conn.readSidebar = trackSidebar(bot, () => this.emit('changed', conn.server.id))
+    conn.captcha = false
+    for (const packet of ['login', 'respawn']) {
+      bot._client.on(packet, ({ worldState }) => {
+        conn.captcha = /captcha/i.test(worldState?.name ?? '') // Minehut's world is minecraft:captcha
+        this.emit('changed', conn.server.id)
+      })
+    }
     conn.maps = new Map()
     conn.frames = new Map()
     conn.mapsVersion = (conn.mapsVersion ?? 0) + 1
@@ -629,12 +639,12 @@ class Manager extends EventEmitter {
     const addressCheck = setInterval(() => {
       if (conn.status !== 'online') return
       const { lobbyCommand } = this.settings(this.addressOf(conn))
-      if (lobbyCommand && inMinehutLobby(conn.readSidebar()) && Date.now() - lobbySent > LOBBY_RETRY) {
+      if (lobbyCommand && !conn.captcha && inMinehutLobby(conn.readSidebar()) && Date.now() - lobbySent > LOBBY_RETRY) {
         lobbySent = Date.now()
         this.addChat(conn, `[client] In the Minehut lobby, sending ${lobbyCommand}`)
         this.send(conn.server.id, lobbyCommand)
       }
-      if (!this.settings(this.addressOf(conn)).checkAddress) {
+      if (conn.captcha || !this.settings(this.addressOf(conn)).checkAddress) { // reconnecting would throw away a captcha in progress
         addressSeen = Date.now()
       } else if (showsAddress(conn.readSidebar(), conn.server.host)) {
         addressSeen = Date.now()
@@ -752,7 +762,7 @@ class Manager extends EventEmitter {
   }
 
   runJobs (address, jobs) {
-    const conns = [...this.conns.values()].filter(c => c.status === 'online' && this.addressOf(c) === address)
+    const conns = [...this.conns.values()].filter(c => c.status === 'online' && !c.captcha && this.addressOf(c) === address)
     const report = (conn, result) => {
       conn.result = result
       this.emit('changed', conn.server.id)
@@ -899,7 +909,7 @@ class Manager extends EventEmitter {
         uuid: account.uuid,
         servers: account.servers.map(server => {
           const conn = this.conns.get(server.id)
-          return { ...server, where: conn.status === 'online' && conn.bot ? serverName(conn.readSidebar()) : '', checkAddress: this.settings(this.addressOf(conn)).checkAddress, lobbyCommand: this.settings(this.addressOf(conn)).lobbyCommand ?? '', status: conn.status, message: conn.message, code: conn.code, retryAt: conn.retryAt }
+          return { ...server, captcha: inCaptcha(conn), where: conn.status === 'online' && conn.bot && !conn.captcha ? serverName(conn.readSidebar()) : '', checkAddress: this.settings(this.addressOf(conn)).checkAddress, lobbyCommand: this.settings(this.addressOf(conn)).lobbyCommand ?? '', status: conn.status, message: conn.message, code: conn.code, retryAt: conn.retryAt }
         })
       }))
     }
@@ -916,6 +926,7 @@ class Manager extends EventEmitter {
         id: conn.server.id,
         name: conn.account.name,
         status: conn.status,
+        captcha: inCaptcha(conn),
         sidebar: conn.status === 'online' && conn.bot ? conn.readSidebar() : null,
         result: conn.result ?? ''
       })
@@ -948,6 +959,7 @@ class Manager extends EventEmitter {
       chat: conn.chat,
       sidebar: bot ? conn.readSidebar() : null,
       mapsVersion: conn.mapsVersion ?? 0,
+      captcha: inCaptcha(conn),
       menu: window
         ? {
             title: toText(window.title),
