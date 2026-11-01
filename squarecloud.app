@@ -1,6 +1,6 @@
 MAIN=src/main.js
 MEMORY=585
 VERSION=recommended
-DISPLAY_NAME=AFK Client
-SUBDOMAIN=afkparmegio
+DISPLAY_NAME=AFK d1nn0
+SUBDOMAIN=afk-d1nn0
 AUTORESTART=true
