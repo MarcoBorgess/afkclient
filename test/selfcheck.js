@@ -399,6 +399,19 @@ async function endToEnd (dataDir) {
     lines: [{ text: 'Money: 5k', number: '' }, { text: 'kills', number: '7' }, { text: 'Rank:  VIP', number: '' }]
   })
 
+  // A map's picture, whole or in pieces; icon-only updates change nothing.
+  const pixelsOf = map => Buffer.from(map.pixels, 'base64')
+  sc.write('map', { itemDamage: 7, scale: 0, locked: true, columns: 128, rows: 128, x: 0, y: 0, data: Buffer.alloc(16384, 34) })
+  await until('map picture', () => manager.detail(id).maps.length === 1)
+  sc.write('map', { itemDamage: 7, scale: 0, locked: true, columns: 2, rows: 1, x: 10, y: 3, data: Buffer.from([50, 51]) })
+  await until('map update', () => pixelsOf(manager.detail(id).maps[0])[3 * 128 + 11] === 51)
+  assert.equal(pixelsOf(manager.detail(id).maps[0])[3 * 128 + 10], 50)
+  assert.equal(pixelsOf(manager.detail(id).maps[0])[3 * 128 + 12], 34, 'the rest stays')
+  sc.write('map', { itemDamage: 7, scale: 0, locked: true, columns: 0 })
+  for (let n = 1; n <= 4; n++) sc.write('map', { itemDamage: n, scale: 0, locked: true, columns: 1, rows: 1, x: 0, y: 0, data: Buffer.from([n]) })
+  await until('newest maps only', () => manager.detail(id).maps[0].id === 4)
+  assert.deepEqual(manager.detail(id).maps.map(m => m.id), [4, 3, 2, 1], 'newest first, oldest dropped')
+
   // A deleted message must not wipe the tracking counters.
   const client = conn.bot._client
   const signature = Buffer.alloc(256, 7)
@@ -419,6 +432,7 @@ async function endToEnd (dataDir) {
   assert.equal(client._lastSeenMessages.pending, 0)
   assert.equal(conn.status, 'online')
   assert.equal(manager.detail(id).sidebar, null, 'sidebar cleared by a server switch')
+  assert.deepEqual(manager.detail(id).maps, [], 'maps cleared by a server switch')
 
   await rewardsAndPayments(manager, id, conn, server, address, clicks, chats)
 

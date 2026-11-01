@@ -28,6 +28,8 @@ const STEP_TIMEOUT = 10000
 const DRAIN_GAP = 6000 // servers like Cobblestone refuse a second payment within 5s
 const MAX_PAYMENTS = 5
 const STAGGER = 1000
+const MAP_SIZE = 128
+const MAX_MAPS = 4
 const PLACEHOLDER = /\{([a-z0-9_]+)(?:\.(\d+))?\}/gi
 const AMOUNT = /(?<![\d.,])(\d[\d,]*(?:\.\d+)?)([a-z]{0,2})(?![a-z0-9])/g
 
@@ -207,6 +209,22 @@ function trackSidebar (bot, onChange) {
     lines.sort((a, b) => b.value - a.value || a.item.localeCompare(b.item))
     return { title: objective.title.replace(/§./g, ''), lines: lines.slice(0, 15).map(({ text, number }) => ({ text, number })) }
   }
+}
+
+// Held or in an item frame, a map's picture arrives the same way. Keeps the newest few, last
+// updated last. An update may cover only part of the 128x128 map.
+function updateMap (maps, { itemDamage: id, columns, rows, x, y, data }) {
+  if (!columns) return false // icons only
+  const pixels = maps.get(id) ?? Buffer.alloc(MAP_SIZE * MAP_SIZE)
+  for (let row = 0; row < rows && y + row < MAP_SIZE; row++) {
+    for (let column = 0; column < columns && x + column < MAP_SIZE; column++) {
+      pixels[(y + row) * MAP_SIZE + x + column] = data[row * columns + column]
+    }
+  }
+  maps.delete(id)
+  maps.set(id, pixels)
+  if (maps.size > MAX_MAPS) maps.delete(maps.keys().next().value)
+  return true
 }
 
 const sidebarText = line => plainCaps(`${line.text} ${line.number}`)
@@ -479,6 +497,11 @@ class Manager extends EventEmitter {
     sendTickEnd(bot)
     fixChatTracking(bot)
     conn.readSidebar = trackSidebar(bot, () => this.emit('changed', conn.server.id))
+    conn.maps = new Map()
+    bot._client.on('login', () => conn.maps.clear()) // a server switch leaves the old maps behind
+    bot._client.on('map', packet => {
+      if (updateMap(conn.maps, packet)) this.emit('changed', conn.server.id)
+    })
 
     let finished = false
     let signedIn = false
@@ -787,6 +810,7 @@ class Manager extends EventEmitter {
       message: conn.message,
       chat: conn.chat,
       sidebar: bot ? conn.readSidebar() : null,
+      maps: bot ? [...conn.maps].reverse().map(([mapId, pixels]) => ({ id: mapId, pixels: pixels.toString('base64') })) : [],
       menu: window
         ? {
             title: toText(window.title),

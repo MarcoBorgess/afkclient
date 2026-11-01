@@ -35,7 +35,7 @@ The admin opens **Users** to create people, set how many accounts each can add, 
 ## What it does
 
 - **Accounts:** sign in with Microsoft, then add servers to each account. They reconnect by themselves, and stop if the account logs in elsewhere or is banned.
-- **Launch:** chat, scoreboard, server menus, inventory and WASD movement for one account.
+- **Launch:** chat, scoreboard, server menus, inventory, maps and WASD movement for one account. It shows the last 4 maps the server sent, held or in item frames, so you can read a map captcha and answer it in chat.
 - **Group:** every connected account's scoreboard, grouped by server, with a command box and buttons that run on all of them.
 - **Lobby handling**, in a server's `⋮` menu:
   - **Must show address on scoreboard** reconnects an account if the server's address has been missing from the scoreboard for a minute.
