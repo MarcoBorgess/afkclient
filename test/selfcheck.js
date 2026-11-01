@@ -582,6 +582,38 @@ async function endToEnd (dataDir) {
   manager.connect(id)
   await until('online after the limit', () => conn.status === 'online')
 
+  // Held in a captcha world: visible, answerable, and nothing else gets sent as the answer.
+  const loginData = require('minecraft-data')(VERSION).loginPacket
+  const world = name => server.lastClient.write('respawn', { worldState: { ...loginData.worldState, name }, copyMetadata: 0 })
+  const captchaState = () => manager.summary().accounts[0].servers[0].captcha
+  assert.equal(captchaState(), false)
+  world('minecraft:captcha')
+  await until('captcha noticed', () => captchaState())
+  assert.equal(manager.detail(id).captcha, true)
+  assert.equal(manager.groups()[0].accounts[0].captcha, true)
+  assert.equal(manager.summary().accounts[0].servers[0].where, '', 'no server name while held')
+  assert.equal(conn.status, 'online', 'still connected, chat has to work')
+  assert.deepEqual(manager.runGroup(address, '/paygems 5 main'), { started: 0 }, 'a payment must not become the answer')
+  const held = server.lastClient
+  held.write('scoreboard_objective', { name: 'hub', action: 0, displayText: text('MINEHUT'), type: 0 })
+  held.write('scoreboard_display_objective', { position: 1, name: 'hub' })
+  manager.setLobbyCommand(address, '/join held')
+  manager.setCheckAddress(address, true)
+  const grace = manager.addressGrace
+  manager.addressGrace = 300
+  await wait(1500)
+  assert(!chats.includes('/join held'), 'no lobby command in the captcha')
+  assert.equal(conn.status, 'online', 'no reconnect in the captcha')
+  manager.send(id, 'abc12')
+  await until('the answer goes out', () => chats.includes('abc12'))
+  manager.setCheckAddress(address, false)
+  manager.setLobbyCommand(address, '')
+  manager.addressGrace = grace
+  world('minecraft:overworld')
+  await until('out of the captcha', () => !captchaState())
+  assert.deepEqual(manager.runGroup(address, '/free'), { started: 1 })
+  await until('group commands work again', () => !conn.running && chats.includes('/free'))
+
   // A duplicate-login kick must leave real Minecraft alone.
   server.lastClient.write('kick_disconnect', { reason: nbt.comp({ translate: nbt.string('multiplayer.disconnect.duplicate_login') }) })
   await until('stop after duplicate login', () => conn.status === 'offline')
