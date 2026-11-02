@@ -65,6 +65,15 @@ An account whose name appears in a command skips that button, so it never pays i
 
 **Run All** runs every button in order, moving on if one fails. Drag buttons to change the order, or use Ctrl+arrow keys.
 
+## Guild (Cobblestone)
+
+In a connection's ⋮ menu, under **Guilda**, each with its own Discord webhook:
+
+- **Rastrear Guilda** reads /guild when the account gets in the game and every 30 minutes. After a "Guild quest complete" chat line it reads /guild again (3s later, retried at 10s and 30s) and posts a picture for each member whose quest count went up: their head, nick and "Completou sua Quest X [#Y]", Y being their place by quests.
+- **Ranking a cada 3h** reads /stats of every member 6-8s apart and posts the podium at 00, 03 ... 21h Brasília time, or on arrival later in that slot. **Rodar ranking agora** runs it at once.
+
+Progress and failures show in the account's chat as `[guild]` lines. Fonts for the pictures are in `fonts/` (Inter, SIL Open Font License).
+
 ## Captcha
 
 An account in Minehut's captcha world shows **Offline - Captcha**. It is connected, so open Launch, read the map and answer in chat. Group commands, lobby commands and the scoreboard address check leave it alone until it is through.

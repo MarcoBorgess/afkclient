@@ -58,6 +58,8 @@ function actions (manager) {
     setButtons: b => manager.setButtons(b.address, b.buttons),
     setCheckAddress: b => manager.setCheckAddress(b.address, b.value),
     setLobbyCommand: b => manager.setLobbyCommand(b.address, b.value),
+    setGuild: b => manager.setGuild(b.id, b),
+    runRanking: b => manager.runRanking(b.id),
     click: b => manager.click(b.id, b.slot, b.button),
     closeMenu: b => manager.closeMenu(b.id),
     selectHotbar: b => manager.selectHotbar(b.id, b.slot),

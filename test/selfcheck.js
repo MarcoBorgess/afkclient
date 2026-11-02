@@ -13,6 +13,7 @@ const { Manager, VERSION, belowShown, blocksReconnect, fillAmounts, parseSteps, 
 const { isAllowedRequest, startServer } = require('../src/server')
 const { createTokenStore } = require('../src/tokenCache')
 const { Users } = require('../src/users')
+const guild = require('../src/guild')
 
 const PORT = 25598
 const WEB_PORT = 25597
@@ -657,6 +658,143 @@ async function endToEnd (dataDir) {
   server.close()
 }
 
+// Real lines from the /guild dump (2026-11-02), as the menu reader receives them.
+const head = (name, lines, skin) => ({ id: 'player_head', lines, profile: { name, properties: skin ? [{ name: 'textures', value: Buffer.from(JSON.stringify({ textures: { SKIN: { url: skin } } })).toString('base64') }] : [] } })
+
+async function guildRules () {
+  const slots = [
+    { id: 'black_stained_glass_pane', lines: ['Black Stained Glass Pane'] },
+    head('eggenjoyer', ['GUILD INFO (10/10)', 'Guild Creation Date: 10/28/26'], 'http://textures.minecraft.net/texture/abc'),
+    head('parmegio', ['parmegio (Online)', 'Guild Owner', '874.08k Crops Farmed', '14 Quests Completed', 'Click to Open Stats'], 'http://textures.minecraft.net/texture/def'),
+    head('p4rme', ['p4rme (Online)', 'Elder', '18 Quests Completed']),
+    head('D1NN0', ['D1NN0 (Online)', 'Member', '15 Quests Completed'], 'http://evil.example/skin.png'),
+    head('Ernani_', ['Ernani_ (Online)', '31 Quests Completed']),
+    head('nxly_', ['nxly_ (Offline)', '15 Quests Completed'])
+  ]
+  const members = guild.readMembers(slots)
+  assert.deepEqual(members.map(m => [m.name, m.quests]), [['parmegio', 14], ['p4rme', 18], ['D1NN0', 15], ['Ernani_', 31], ['nxly_', 15]], 'icon heads are not members')
+  assert.equal(members[0].skin, 'http://textures.minecraft.net/texture/def')
+  assert.equal(members[2].skin, null, 'skins only from Mojang')
+  const rank = name => guild.questRank(members, members.find(m => m.name === name))
+  assert.deepEqual(['Ernani_', 'p4rme', 'D1NN0', 'nxly_', 'parmegio'].map(rank), [1, 2, 3, 3, 5], 'ties share a place')
+  const before = new Map(members.map(m => [m.name, m]))
+  const after = members.map(m => m.name === 'D1NN0' ? { ...m, quests: 17 } : m).concat({ name: 'newbie', quests: 3 })
+  assert.deepEqual(guild.questRises(before, after).map(m => [m.name, m.quests]), [['D1NN0', 17]], 'one post with the final count, a new member is no rise')
+
+  assert.equal(guild.findValue(['Completion 18.1%', 'Crops Discovered 20/48'], 'completion'), '18.1%')
+  assert.equal(guild.findValue(['Completion', '12%'], 'completion'), '12%')
+  assert.equal(guild.findValue(['Crops Farmed [#329]', 'Total: 257,500'], 'total'), '257,500')
+  assert.equal(guild.findValue(['nothing'], 'total'), null)
+  assert.equal(guild.numberValue('257,500'), 257500)
+  assert.equal(guild.numberValue('1.5k'), 1500)
+  assert.equal(guild.numberValue(null), -1)
+
+  assert.equal(guild.rankingSlot(Date.UTC(2026, 10, 2, 2, 59)), '2026-11-01/7', '23:59 in Brasília')
+  assert.equal(guild.rankingSlot(Date.UTC(2026, 10, 2, 3, 0)), '2026-11-02/0', 'midnight in Brasília')
+  assert.equal(guild.rankingSlot(Date.UTC(2026, 10, 2, 13, 0)), '2026-11-02/3', '10h in Brasília')
+
+  const hook = 'https://discord.com/api/webhooks/123/abc-DEF_9'
+  assert.throws(() => guild.guildSettings({}, { track: true }), /needs a webhook/)
+  assert.throws(() => guild.guildSettings({}, { trackWebhook: 'https://evil.example/api/webhooks/1/x' }), /Discord webhook/)
+  assert.throws(() => guild.guildSettings({}, { rankingWebhook: 'http://discord.com/api/webhooks/1/x' }), /Discord webhook/)
+  const on = guild.guildSettings({}, { track: true, trackWebhook: ' ' + hook + ' ', ranking: true, rankingWebhook: hook })
+  assert.equal(on.trackWebhook, hook)
+  assert.equal(on.lastSlot, guild.rankingSlot(), 'switching on does not post right away')
+  assert.equal(guild.guildSettings({ ...on, lastSlot: 'old' }, on).lastSlot, 'old', 'already on: keeps its slot')
+
+  // Rendered offline: no skin, and mc-heads.net may be unreachable; both must still give a picture.
+  const png = await guild.questImage({ name: 'D1NN0', quests: 16 }, 3)
+  assert.equal(png.subarray(1, 4).toString(), 'PNG')
+  const podium = await guild.podiumImage([
+    { name: 'a', completion: '20%', crops: '1' }, { name: 'b', completion: null, crops: null }, { name: 'c', completion: '5%', crops: '3' }, { name: 'd', completion: '1%', crops: '4' }
+  ])
+  assert.equal(podium.subarray(1, 4).toString(), 'PNG')
+  if (process.env.GUILD_IMAGES) {
+    fs.writeFileSync(path.join(process.env.GUILD_IMAGES, 'quest.png'), png)
+    fs.writeFileSync(path.join(process.env.GUILD_IMAGES, 'podium.png'), podium)
+  }
+}
+
+// A member completes a quest; later a ranking reads /stats of everyone, through one cooldown.
+async function guildFlow (dataDir) {
+  const data = require('minecraft-data')(VERSION)
+  const { server, chats } = fakeServer()
+  await new Promise(resolve => server.on('listening', resolve))
+  const posts = []
+  const manager = new Manager({
+    dataDir,
+    tokens: { factory: () => { throw new Error('unused') }, remove: async () => {} },
+    botOptions: { auth: 'offline', username: 'p4rme' },
+    guildTiming: { ready: 200, questDelay: 200, questRetries: [300, 300], statsGap: [50, 100], cooldownStep: 100, cooldownMax: 200 },
+    postWebhook: async (url, png, filename, payload) => { posts.push({ url, png, filename, payload }) }
+  })
+  manager.config.accounts.push({ id: 'a1', name: 'p4rme', uuid: 'u', servers: [] })
+  manager.addServer('a1', `127.0.0.1:${PORT}`, false)
+  const id = manager.config.accounts[0].servers[0].id
+  const conn = manager.conns.get(id)
+  const text = value => nbt.comp({ text: nbt.string(value) })
+  const quests = { p4rme: 18, D1NN0: 15, parmegio: 14 }
+  const item = (name, components = []) => ({ itemCount: 1, itemId: data.itemsByName[name].id, addedComponentCount: components.length, removedComponentCount: 0, components, removeComponents: [] })
+  const named = (title, lore) => [{ type: 'custom_name', data: text(title) }, { type: 'lore', data: lore.map(text) }]
+  const memberHead = name => item('player_head', [...named(`${name} (Online)`, ['Member', `${quests[name]} Quests Completed`]), { type: 'profile', data: { type: 'partial', name, properties: [], skinPatch: {} } }])
+  const show = (sc, title, slots) => {
+    sc.write('open_window', { windowId: 5, inventoryType: 5, windowTitle: text(title) })
+    sc.write('window_items', { windowId: 5, stateId: 1, items: Array.from({ length: 90 }, (_, i) => slots[i] ?? { itemCount: 0 }), carriedItem: { itemCount: 0 } })
+  }
+  let cooled = false
+  const say = (sc, line) => sc.write('system_chat', { content: text(line), isActionBar: false })
+  const command = sc => ({ command }) => {
+    if (command === 'guild') show(sc, 'Guild Info | test', { 4: item('player_head', [...named('GUILD INFO', ['x']), { type: 'profile', data: { type: 'partial', name: 'eggenjoyer', properties: [], skinPatch: {} } }]), 11: memberHead('parmegio'), 12: memberHead('p4rme'), 13: memberHead('D1NN0') })
+    const stats = /^stats (\w+)$/.exec(command)
+    if (!stats) return
+    if (stats[1] === 'D1NN0' && !cooled) {
+      cooled = true
+      return say(sc, 'Wait a moment before using /stats again.')
+    }
+    show(sc, `${stats[1]}'s Stats`, { 10: item('beacon', named('Completion ' + quests[stats[1]] + '%', [])), 12: item('wheat', named('Crops Farmed [#329]', ['Total: 1,000'])) })
+  }
+  server.on('playerJoin', sc => {
+    sc.on('chat_command', command(sc))
+    sc.on('chat_command_signed', command(sc))
+    sc.write('scoreboard_objective', { name: 'side', action: 0, displayText: text('COBBLESTONE'), type: 0 })
+    sc.write('scoreboard_display_objective', { position: 1, name: 'side' })
+  })
+
+  manager.setGuild(id, { track: true, trackWebhook: 'https://discord.com/api/webhooks/1/quests', ranking: true, rankingWebhook: 'https://discord.com/api/webhooks/1/ranking' })
+  assert.equal(manager.summary().accounts[0].servers[0].guild.track, true, 'the page sees its settings')
+  manager.connect(id)
+  await until('first /guild read', () => conn.guildMembers?.size === 3)
+  assert.equal(manager.detail(id).menu, null, 'menu closed after reading')
+  assert.equal(posts.length, 0, 'the first read only remembers, and switching on does not start a ranking')
+
+  // The count goes up a moment after the chat line, as on the real server.
+  say(server.lastClient, 'GUILDS • Guild quest complete: Play for 30 minutes')
+  say(server.lastClient, 'GUILDS • Guild received 10 Points')
+  setTimeout(() => { quests.D1NN0 = 17 }, 400)
+  await until('quest posted', () => posts.length === 1, 10000)
+  assert.equal(posts[0].url, 'https://discord.com/api/webhooks/1/quests')
+  assert.equal(posts[0].png.subarray(1, 4).toString(), 'PNG')
+  assert.match(conn.chat.at(-1).text, /^\[guild\] D1NN0 completed quest 17 \[#2\], posted$/)
+  assert.equal(chats.filter(c => c === '/guild').length, 3, 'snapshot, then the first check found nothing, then the retry')
+
+  say(server.lastClient, 'GUILDS • Guild quest complete: Farm 1000 crops')
+  await until('nobody went up', () => conn.chat.at(-1).text === '[guild] Quest completed, but nobody went up', 10000)
+  assert.equal(posts.length, 1)
+
+  manager.runRanking(id)
+  assert.throws(() => manager.runRanking(id), /already running/)
+  await until('ranking posted', () => posts.length === 2, 20000)
+  assert.equal(posts[1].filename, 'ranking.png')
+  assert.equal(posts[1].payload.embeds[0].image.url, 'attachment://ranking.png')
+  assert.match(conn.chat.at(-1).text, /^\[guild\] Ranking sent: 3 players$/, 'the cooldown was waited out, nobody missing')
+  assert.equal(chats.filter(c => c === '/stats D1NN0').length, 2)
+  assert(!conn.running, 'the menu lock is released')
+  manager.disconnect(id)
+  await until('offline', () => conn.status === 'offline')
+  assert.throws(() => manager.runRanking(id), /not online/)
+  server.close()
+}
+
 async function main () {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'afkclient-'))
   try {
@@ -668,6 +806,8 @@ async function main () {
     await tokens(path.join(root, 'tokens')); console.log('ok  encrypted token round trip')
     await multiUser(path.join(root, 'site')); console.log('ok  login, admin, account limits, users kept apart')
     await endToEnd(path.join(root, 'data')); console.log('ok  connect, chat, commands, menu click, controls, reconnect rules')
+    await guildRules(); console.log('ok  guild menu reading, ranks, settings, pictures')
+    await guildFlow(path.join(root, 'guild')); console.log('ok  guild quest post and ranking on a fake server')
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
   }

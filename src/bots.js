@@ -6,6 +6,7 @@ const { setTimeout: wait } = require('timers/promises')
 const mineflayer = require('mineflayer')
 const { Authflow, Titles } = require('prismarine-auth')
 const { computeChatChecksum } = require('minecraft-protocol/src/datatypes/checksums')
+const { attachGuild, guildSettings } = require('./guild')
 
 // Change this one value to move to a newer Minecraft once mineflayer supports it.
 const VERSION = '1.21.11'
@@ -361,8 +362,10 @@ function traceConnection (bot) {
 }
 
 class Manager extends EventEmitter {
-  constructor ({ dataDir, tokens, botOptions = {}, flow = Authflow, addressGrace = ADDRESS_GRACE, maxAccounts = () => Infinity, isTaken = () => false, isAllowedServer = () => true }) {
+  constructor ({ dataDir, tokens, botOptions = {}, flow = Authflow, addressGrace = ADDRESS_GRACE, maxAccounts = () => Infinity, isTaken = () => false, isAllowedServer = () => true, guildTiming, postWebhook }) {
     super()
+    this.guildTiming = guildTiming
+    this.postWebhook = postWebhook
     this.configFile = path.join(dataDir, 'config.json')
     this.tokens = tokens
     this.maxAccounts = maxAccounts
@@ -485,6 +488,20 @@ class Manager extends EventEmitter {
     this.checkKnownAddress(address)
     this.settings(address).lobbyCommand = String(value ?? '').trim().slice(0, 256)
     this.save()
+  }
+
+  setGuild (id, values) {
+    const conn = this.conn(id)
+    conn.server.guild = guildSettings(conn.server.guild, values ?? {})
+    this.save()
+  }
+
+  runRanking (id) {
+    const conn = this.conn(id)
+    if (!conn.server.guild?.rankingWebhook) throw new Error('Paste the ranking webhook first')
+    if (conn.status !== 'online' || !conn.runRanking) throw new Error('This connection is not online')
+    if (conn.guildRanking) throw new Error('A ranking is already running')
+    conn.runRanking()
   }
 
   setButtons (address, buttons) {
@@ -666,6 +683,7 @@ class Manager extends EventEmitter {
       }
       clearTimeout(watchdog)
       clearInterval(addressCheck)
+      stopGuild()
       conn.bot = null
       conn.code = null
       bot.removeAllListeners('move')
@@ -722,6 +740,15 @@ class Manager extends EventEmitter {
     })
     bot.on('message', (message, position) => {
       if (position !== 'game_info') this.addChat(conn, chatLine(message, position === 'chat' ? sender : null))
+    })
+    const stopGuild = attachGuild(this, conn, bot, {
+      ready: () => conn.status === 'online' && !conn.captcha && !!conn.readSidebar() && !inMinehutLobby(conn.readSidebar()),
+      plain: plainCaps,
+      lines: item => {
+        const { name, lore } = serializeItem(item)
+        return [name, ...lore].map(line => line.trim()).filter(Boolean)
+      },
+      toText
     })
     for (const event of ['windowOpen', 'windowClose', 'health', 'move', 'teamUpdated', 'teamCreated', 'teamMemberAdded']) {
       bot.on(event, () => this.emit('changed', conn.server.id))
