@@ -132,6 +132,9 @@
     <label class="field">Webhook das quests
       <input id="menu-track-hook" type="url" class="guild-input" autocomplete="off" placeholder="https://discord.com/api/webhooks/...">
     </label>
+    <label class="field" title="Pinged with each hour's new quests. Discord: Developer Mode on, right-click the role, Copy Role ID. Empty pings nobody.">ID do cargo para pingar
+      <input id="menu-role" type="text" inputmode="numeric" class="guild-input" autocomplete="off" placeholder="123456789012345678">
+    </label>
     <label title="At 00, 03, 06 ... 21h Brasília time, or on arrival later in that 3-hour slot"><input id="menu-ranking" type="checkbox" class="guild-input"> Ranking a cada 3h</label>
     <label class="field">Webhook do ranking
       <input id="menu-ranking-hook" type="url" class="guild-input" autocomplete="off" placeholder="https://discord.com/api/webhooks/...">
@@ -388,13 +391,14 @@ $('menu-lobby').onchange = e => run('setLobbyCommand', { address: `${menuServer.
 function showGuild (guild) {
   $('menu-track').checked = !!guild.track
   $('menu-track-hook').value = guild.trackWebhook ?? ''
+  $('menu-role').value = guild.roleId ?? ''
   $('menu-ranking').checked = !!guild.ranking
   $('menu-ranking-hook').value = guild.rankingWebhook ?? ''
 }
 for (const input of document.querySelectorAll('.guild-input')) {
   input.onchange = () => {
     const server = menuServer
-    const values = { id: server.id, track: $('menu-track').checked, trackWebhook: $('menu-track-hook').value, ranking: $('menu-ranking').checked, rankingWebhook: $('menu-ranking-hook').value }
+    const values = { id: server.id, track: $('menu-track').checked, trackWebhook: $('menu-track-hook').value, roleId: $('menu-role').value, ranking: $('menu-ranking').checked, rankingWebhook: $('menu-ranking-hook').value }
     act('setGuild', values)
       .then(() => {
         $('menu-guild-error').textContent = ''
