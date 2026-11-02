@@ -71,7 +71,7 @@ In a connection's ⋮ menu, under **Guilda**, each with its own Discord webhook:
 
 - **Rastrear Guilda** reads /guild and /guild quests when the account gets in the game and every 30 minutes, with the webhook and the role to ping:
   - after a "Guild quest complete" chat line it reads /guild again (3s later, retried at 10s and 30s) and posts a banner for each member whose quest count went up: their head, nick and "Completou sua Quest X [#Y]", Y being their place by quests;
-  - when the hour's quests reset (the countdown in QUEST INFO, read 15s after it ends) it posts the new quests as a message pinging the role, once per hour even across restarts;
+  - when the hour's quests reset ("New guild quests have become available!" in chat, else 15s after the QUEST INFO countdown ends) it posts the new quests as a message pinging the role, once per hour even across restarts;
   - a **quest ranking** (podium by Quests Completed, "+N" since the last one, crops and last 24h) goes out when all the hour's quests are done, or at the reset if anyone did one since the last ranking. Nothing changed, no ranking.
 - **Ranking a cada 3h** reads /stats of every member 6-8s apart and posts the podium at 00, 03 ... 21h Brasília time, or on arrival later in that slot. **Rodar ranking agora** runs it at once.
 

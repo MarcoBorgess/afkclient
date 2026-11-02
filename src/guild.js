@@ -302,6 +302,7 @@ function attachGuild (manager, conn, bot, { ready, plain, lines, toText }) {
   let refusedAt = 0
   let stopped = false
   let resetTimer = null
+  let resetPending = false
   conn.guildMembers ??= new Map()
 
   bot.on('message', message => {
@@ -311,6 +312,14 @@ function attachGuild (manager, conn, bot, { ready, plain, lines, toText }) {
     if (text.includes('guild quest complete') && settings().track && !checkPending) {
       checkPending = true
       setTimeout(() => checkQuests().catch(err => log(`Quest check failed: ${err.message}`)), timing.questDelay)
+    }
+    // "GUILDS • New guild quests have become available!" The countdown timer stays as the fallback.
+    if (text.includes('new guild quests have become available') && settings().track && !resetPending) {
+      resetPending = true
+      setTimeout(() => {
+        resetPending = false
+        readAgain().catch(err => log(`Reading /guild quests failed: ${err.message}`))
+      }, timing.questDelay)
     }
   })
 

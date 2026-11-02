@@ -861,6 +861,15 @@ async function guildFlow (dataDir) {
   await until('banner, new hour and its ranking', () => posts.length === 7, 15000)
   assert.deepEqual(posts.slice(4).map(p => p.filename), ['quest.png', null, 'quests.png'])
   assert.match(posts[5].payload.embeds[0].footer.text, /^Hora passada: 1\/2 feitas/)
+
+  // The server's chat line brings the next hour in, without waiting for the countdown.
+  shift(0)
+  say(server.lastClient, 'GUILDS • New guild quests have become available!')
+  await until('announced from the chat line', () => posts.length === 8, 10000)
+  assert.match(posts[7].payload.embeds[0].description, /Farm 41 Wheat/)
+  say(server.lastClient, 'GUILDS • New guild quests have become available!')
+  await wait(1500)
+  assert.equal(posts.length, 8, 'once per hour')
   posts.length = 0
 
   manager.runRanking(id)
