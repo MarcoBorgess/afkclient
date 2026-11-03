@@ -363,8 +363,9 @@ function traceConnection (bot) {
 }
 
 class Manager extends EventEmitter {
-  constructor ({ dataDir, tokens, botOptions = {}, flow = Authflow, addressGrace = ADDRESS_GRACE, maxAccounts = () => Infinity, isTaken = () => false, isAllowedServer = () => true, guildTiming, postWebhook }) {
+  constructor ({ dataDir, tokens, botOptions = {}, flow = Authflow, addressGrace = ADDRESS_GRACE, maxAccounts = () => Infinity, isTaken = () => false, isAllowedServer = () => true, guildTiming, postWebhook, defaultOfflineWebhook }) {
     super()
+    this.defaultOfflineWebhook = defaultOfflineWebhook
     this.guildTiming = guildTiming
     this.postWebhook = postWebhook
     this.configFile = path.join(dataDir, 'config.json')
@@ -390,6 +391,7 @@ class Manager extends EventEmitter {
     for (const account of this.config.accounts) {
       for (const server of account.servers) this.conns.set(server.id, this.newConn(account, server))
     }
+    if (this.offlineDefaulted) this.save()
     this.offlineTimer = watchOffline({
       conns: this.conns,
       addressOf: conn => this.addressOf(conn),
@@ -400,6 +402,11 @@ class Manager extends EventEmitter {
   }
 
   newConn (account, server) {
+    // OFFLINE_WEBHOOK fills every server that never had the field; one cleared on the page ("") stays off.
+    if (this.defaultOfflineWebhook && server.guild?.offlineWebhook === undefined) {
+      server.guild = { ...server.guild, offlineWebhook: this.defaultOfflineWebhook }
+      this.offlineDefaulted = true
+    }
     return { account, server, wanted: false, status: 'offline', message: '', code: null, chat: [], delay: FIRST_DELAY, bot: null, timer: null, retryAt: null }
   }
 

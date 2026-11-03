@@ -128,6 +128,18 @@ function offlineChecks () {
   assert.match(offlineMessage({ kind: 'back', downFor: 12 * 60000 }, 'parmegio', 'cobblestone.minehut.gg').content, /voltou.*12 min/)
   assert.equal(guild.guildSettings({}, { offlineWebhook: ' https://discord.com/api/webhooks/1/abc ' }).offlineWebhook, 'https://discord.com/api/webhooks/1/abc')
   assert.throws(() => guild.guildSettings({}, { offlineWebhook: 'https://evil.com/x' }), /Aviso de queda/)
+
+  // OFFLINE_WEBHOOK fills the servers that never had the field, and leaves a cleared one alone.
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'afkclient-offline-'))
+  const hook = 'https://discord.com/api/webhooks/1/default'
+  const servers = [{ id: 'a', host: 'x.gg' }, { id: 'b', host: 'x.gg', guild: { offlineWebhook: '' } }, { id: 'c', host: 'x.gg', guild: { track: true } }]
+  fs.writeFileSync(path.join(dataDir, 'config.json'), JSON.stringify({ accounts: [{ name: 'n', uuid: 'u', servers }] }))
+  const manager = new Manager({ dataDir, tokens: {}, defaultOfflineWebhook: hook })
+  manager.shutdown()
+  const saved = JSON.parse(fs.readFileSync(path.join(dataDir, 'config.json'), 'utf8')).accounts[0].servers
+  assert.deepEqual(saved.map(s => s.guild?.offlineWebhook), [hook, '', hook], 'default only where never set, and saved')
+  assert.equal(saved[2].guild.track, true, 'other guild settings kept')
+  fs.rmSync(dataDir, { recursive: true, force: true })
 }
 
 function requestChecks () {

@@ -546,4 +546,4 @@ function guildSettings (current = {}, { track, trackWebhook, roleId, ranking, ra
   return next
 }
 
-module.exports = { postWebhook, attachGuild, guildSettings, readMembers, readQuests, questRank, questRises, findValue, numberValue, rankingSlot, questImage, podiumImage, questLayout, questsMessage, skinUrl }
+module.exports = { WEBHOOK, postWebhook, attachGuild, guildSettings, readMembers, readQuests, questRank, questRises, findValue, numberValue, rankingSlot, questImage, podiumImage, questLayout, questsMessage, skinUrl }

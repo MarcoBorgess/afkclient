@@ -1,6 +1,7 @@
 const path = require('path')
 const { startServer } = require('./server')
 const { Users } = require('./users')
+const { WEBHOOK } = require('./guild')
 
 const PORT = Number(process.env.PORT ?? 25599)
 const HOST = process.env.HOST ?? '127.0.0.1'
@@ -25,7 +26,9 @@ try {
     tokenKey: process.env.TOKEN_KEY,
     adminName: process.env.ADMIN_USER,
     adminPassword: process.env.ADMIN_PASSWORD,
-    allowedServers: SERVERS.split(',').map(server => server.trim().toLowerCase()).filter(Boolean)
+    allowedServers: SERVERS.split(',').map(server => server.trim().toLowerCase()).filter(Boolean),
+    // Env, not code: the repo is public and a webhook URL lets anyone post to the channel.
+    managerOptions: { defaultOfflineWebhook: WEBHOOK.test(process.env.OFFLINE_WEBHOOK?.trim() ?? '') ? process.env.OFFLINE_WEBHOOK.trim() : undefined }
   })
 } catch (err) {
   stop(err.message)
