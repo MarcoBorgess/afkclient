@@ -148,23 +148,6 @@ function centered (ctx, text, x, y, font, color) {
   ctx.fillText(text, x, y)
 }
 
-// A banner: the head on the left, the nick and the quest count beside it.
-async function questImage (member, rank) {
-  const canvas = createCanvas(600, 160)
-  const ctx = canvas.getContext('2d')
-  ctx.fillStyle = BG
-  ctx.fillRect(0, 0, 600, 160)
-  await drawHead(ctx, member, 16, 16, 128)
-  ctx.textAlign = 'left'
-  ctx.font = 'bold 32px Inter'
-  ctx.fillStyle = '#ffffff'
-  ctx.fillText(member.name, 168, 70)
-  ctx.font = '24px Inter'
-  ctx.fillStyle = '#b5bac1'
-  ctx.fillText(`Completou sua Quest ${member.quests} [#${rank}]`, 168, 112)
-  return canvas.encode('png')
-}
-
 const GREEN = '#57f287'
 const segments = value => typeof value === 'string' ? [[value, null]] : value
 
@@ -255,10 +238,16 @@ async function podiumImage (players, layout = COMPLETION_LAYOUT) {
   return canvas.encode('png')
 }
 
-// The reset message: text, so the role ping works and it reads well on a phone.
-function questsMessage ({ quests, endsAt }, previous, points, roleId) {
+// The hour's message: text, so the role ping works and it reads well on a phone. Posted at the reset, then edited:
+// a done quest gets a check and who did it (doers: task -> names, from the chat line and the /guild count).
+function questsMessage ({ quests, endsAt }, previous, points, roleId, doers = {}) {
   const icon = name => /farm/i.test(name) ? '⛏' : /mob/i.test(name) ? '⚔' : /play/i.test(name) ? '⏱' : '•'
   const label = name => name.replace(/\s*quest\s*/i, ' ').trim().toLowerCase().replace(/^\w/, c => c.toUpperCase())
+  const markdown = text => String(text).replace(/[_*~`|\\]/g, c => `\\${c}`) // nicks like _raysz must not turn italic
+  const doer = q => Object.entries(doers).find(([task]) => task.toLowerCase() === q.task.toLowerCase())?.[1]
+  const line = q => q.done
+    ? `✅ **${label(q.name)}** — ~~${q.task}~~ · ${q.points} pts${doer(q) ? ` — **${markdown(doer(q))}**` : ''}`
+    : `${icon(q.name)} **${label(q.name)}** — ${q.task} · ${q.points} pts`
   const until = endsAt ? ` (até ${new Date(endsAt - 3 * 3600000).toISOString().slice(11, 16)})` : ''
   const footer = [previous ? `Hora passada: ${previous.quests.filter(q => q.done).length}/${previous.quests.length} feitas` : '', Number.isFinite(points) ? `Guild Points ${points}` : ''].filter(Boolean).join(' · ')
   return {
@@ -266,23 +255,29 @@ function questsMessage ({ quests, endsAt }, previous, points, roleId) {
     allowed_mentions: { roles: roleId ? [roleId] : [] },
     embeds: [{
       title: `🆕 Novas quests da guilda${until}`,
-      description: quests.map(q => `${icon(q.name)} **${label(q.name)}** — ${q.task} · ${q.points} pts`).join('\n'),
+      description: quests.map(line).join('\n'),
       color: 0x5865f2,
       ...(footer ? { footer: { text: footer } } : {})
     }]
   }
 }
 
-// No png: a plain message.
-async function postWebhook (url, png, filename, payload = {}) {
-  let body = JSON.stringify(payload)
+// No png: a plain message. With messageId the webhook edits that message instead (one deleted on Discord is
+// posted again). Returns the message id, so the caller can keep editing the same message.
+async function postWebhook (url, png, filename, payload = {}, messageId = null) {
+  const target = new URL(messageId ? `${url}/messages/${messageId}` : url)
+  if (!messageId) target.searchParams.set('wait', 'true') // Discord answers with the message, id included
+  const json = png && messageId ? { ...payload, attachments: [{ id: 0, filename }] } : payload // the new picture replaces the old
+  let body = JSON.stringify(json)
   if (png) {
     body = new FormData()
-    body.append('payload_json', JSON.stringify(payload))
+    body.append('payload_json', JSON.stringify(json))
     body.append('files[0]', new Blob([png], { type: 'image/png' }), filename)
   }
-  const res = await fetch(url, { method: 'POST', body, headers: png ? {} : { 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(30000) })
+  const res = await fetch(target, { method: messageId ? 'PATCH' : 'POST', body, headers: png ? {} : { 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(30000) })
+  if (messageId && res.status === 404) return postWebhook(url, png, filename, payload)
   if (!res.ok) throw new Error(`Discord refused it: HTTP ${res.status}`)
+  return (await res.json().catch(() => ({}))).id ?? null
 }
 
 // ----- running on a connection -----
@@ -303,12 +298,16 @@ function attachGuild (manager, conn, bot, { ready, plain, lines, toText }) {
   let stopped = false
   let resetTimer = null
   let resetPending = false
+  const completedTasks = [] // "Farm 3,000 Melon" from the chat, waiting for /guild to say who did it
+  let waveShown = '' // what the hour's message shows now: an edit only when it changes
   conn.guildMembers ??= new Map()
 
   bot.on('message', message => {
     const text = plain(message.toString())
     if (text.includes('wait a moment before using /stats')) cooldownAt = Date.now()
     if (text.includes('view that player') && text.includes('stats')) refusedAt = Date.now()
+    const completed = /guild quest complete:\s*(.+?)\s*$/i.exec(message.toString())
+    if (completed && settings().track) completedTasks.push(completed[1])
     if (text.includes('guild quest complete') && settings().track && !checkPending) {
       checkPending = true
       setTimeout(() => checkQuests().catch(err => log(`Quest check failed: ${err.message}`)), timing.questDelay)
@@ -392,13 +391,29 @@ function attachGuild (manager, conn, bot, { ready, plain, lines, toText }) {
     const announced = settings().announced ?? 0
     const newHour = found.endsAt && Math.abs(found.endsAt - announced) > SAME_HOUR
     const allDone = found.quests.every(q => q.done)
+    const guild = conn.server.guild
     if (newHour) {
-      conn.server.guild.announced = found.endsAt
+      guild.announced = found.endsAt
+      guild.wave = null // the old hour's message is never edited with the new quests, even if this post fails
       manager.save()
       // previous is only the last hour when it was read before this hour began
-      const last = previous?.endsAt && Math.abs(previous.endsAt - found.endsAt) > SAME_HOUR ? previous : null
-      await post(settings().trackWebhook, null, null, questsMessage(found, last, found.points, settings().roleId))
+      const last = previous?.endsAt && Math.abs(previous.endsAt - found.endsAt) > SAME_HOUR ? { quests: previous.quests.map(q => ({ done: q.done })) } : null
+      const message = questsMessage(found, last, found.points, guild.roleId)
+      guild.wave = { endsAt: found.endsAt, last, doers: {}, messageId: await post(guild.trackWebhook, null, null, message) }
+      waveShown = JSON.stringify(message)
+      manager.save()
       log(`New quests posted: ${found.quests.map(q => q.task).join(', ')}`)
+    } else if (guild.wave?.messageId) { // the wave is always the announced hour's: set together above
+      const message = questsMessage(found, guild.wave.last, found.points, guild.roleId, guild.wave.doers)
+      const shown = JSON.stringify(message)
+      if (shown !== waveShown) {
+        const messageId = await post(guild.trackWebhook, null, null, message, guild.wave.messageId)
+        waveShown = shown
+        if (messageId && messageId !== guild.wave.messageId) {
+          guild.wave.messageId = messageId
+          manager.save()
+        }
+      }
     }
     if (found.endsAt) {
       clearTimeout(resetTimer)
@@ -415,9 +430,12 @@ function attachGuild (manager, conn, bot, { ready, plain, lines, toText }) {
         .sort((a, b) => b.quests - a.quests || b.delta - a.delta)
       const shownHour = allDone && !newHour ? found : previous ?? found
       const footer = `Quests da hora: ${shownHour.quests.filter(q => q.done).length}/${shownHour.quests.length} · Guild Points ${found.points}`
-      await post(settings().trackWebhook, await podiumImage(players, questLayout(players, footer)), 'quests.png', {})
+      // One message, edited every time (a new webhook or a deleted message starts a new one), in the ranking
+      // channel with the 3-hour ranking; the quests channel only while no ranking webhook is set.
+      guild.questRankingMessage = await post(guild.rankingWebhook || guild.trackWebhook, await podiumImage(players, questLayout(players, footer)), 'quests.png', {}, guild.questRankingMessage) ?? guild.questRankingMessage
+      manager.save()
       conn.guildRankedAt = new Map(members.map(m => [m.name, m.quests]))
-      log('Quest ranking posted')
+      log('Quest ranking updated')
     }
   }
 
@@ -444,15 +462,18 @@ function attachGuild (manager, conn, bot, { ready, plain, lines, toText }) {
       if (!before.size) return log('Quest completed, but there was nothing to compare with yet')
       const rises = questRises(before, members)
       if (!rises.length) continue
-      for (const member of rises) {
-        const rank = questRank(members, member)
-        await post(settings().trackWebhook, await questImage(member, rank), 'quest.png')
-        log(`${member.name} completed quest ${member.quests} [#${rank}], posted`)
-      }
-      // Was it the hour's last quest?
+      // One rise per task: in order. Otherwise every task gets every name, the counts cannot tell them apart.
+      const tasks = completedTasks.splice(0)
+      const names = rises.map(m => m.name)
+      const wave = conn.server.guild.wave
+      if (wave) tasks.forEach((task, i) => { wave.doers[task] = tasks.length === names.length ? names[i] : names.join(', ') })
+      manager.save()
+      log(`${names.join(', ')} completed ${tasks.join(', ') || 'a quest'}`)
+      // Edits the hour's message, and was it the hour's last quest?
       await questsRead(await exclusive(readQuestMenu), members)
       return
     }
+    completedTasks.length = 0
     log('Quest completed, but nobody went up')
   }
 
@@ -490,9 +511,11 @@ function attachGuild (manager, conn, bot, { ready, plain, lines, toText }) {
         return players
       })
       players.sort((a, b) => numberValue(b.completion) - numberValue(a.completion))
-      await post(settings().rankingWebhook, await podiumImage(players), 'ranking.png', {
+      const guild = conn.server.guild // one message, edited every 3 hours
+      guild.rankingMessage = await post(settings().rankingWebhook, await podiumImage(players), 'ranking.png', {
         embeds: [{ title: 'Guild Ranking', color: 0xe6b422, timestamp: new Date().toISOString(), image: { url: 'attachment://ranking.png' } }]
-      })
+      }, guild.rankingMessage) ?? guild.rankingMessage
+      manager.save()
       const missing = players.filter(p => p.completion === null).length
       log(`Ranking sent: ${players.length} players${missing ? `, ${missing} without Completion` : ''}`)
     } finally {
@@ -546,4 +569,4 @@ function guildSettings (current = {}, { track, trackWebhook, roleId, ranking, ra
   return next
 }
 
-module.exports = { WEBHOOK, postWebhook, attachGuild, guildSettings, readMembers, readQuests, questRank, questRises, findValue, numberValue, rankingSlot, questImage, podiumImage, questLayout, questsMessage, skinUrl }
+module.exports = { WEBHOOK, postWebhook, attachGuild, guildSettings, readMembers, readQuests, questRank, questRises, findValue, numberValue, rankingSlot, podiumImage, questLayout, questsMessage, skinUrl }
