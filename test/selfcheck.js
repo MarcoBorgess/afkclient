@@ -968,7 +968,13 @@ async function webhookEdits () {
     assert.equal(await guild.postWebhook(url, null, null, { content: 'x' }), 'new1')
     assert.equal(await guild.postWebhook(url, Buffer.from('png'), 'a.png', {}, 'm9'), 'kept')
     assert.equal(await guild.postWebhook(url, null, null, { content: 'x' }, 'gone'), 'new1', 'deleted on Discord: posted again')
-    assert.deepEqual(seen, ['POST /api/webhooks/1/abc?wait=true', 'PATCH /api/webhooks/1/abc/messages/m9', 'PATCH /api/webhooks/1/abc/messages/gone', 'POST /api/webhooks/1/abc?wait=true'])
+    // What the outage alert calls: with no test hook, the real poster (a shadowed name once made it undefined).
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'afkclient-hook-'))
+    const real = new Manager({ dataDir, tokens: {} })
+    real.shutdown()
+    assert.equal(await real.sendWebhook(url, null, null, { content: 'x' }), 'new1', 'a Manager without the test hook posts for real')
+    fs.rmSync(dataDir, { recursive: true, force: true })
+    assert.deepEqual(seen, ['POST /api/webhooks/1/abc?wait=true', 'PATCH /api/webhooks/1/abc/messages/m9', 'PATCH /api/webhooks/1/abc/messages/gone', 'POST /api/webhooks/1/abc?wait=true', 'POST /api/webhooks/1/abc?wait=true'])
   } finally {
     discord.close()
   }

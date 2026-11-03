@@ -6,7 +6,7 @@ const { setTimeout: wait } = require('timers/promises')
 const mineflayer = require('mineflayer')
 const { Authflow, Titles } = require('prismarine-auth')
 const { computeChatChecksum } = require('minecraft-protocol/src/datatypes/checksums')
-const { attachGuild, guildSettings, postWebhook } = require('./guild')
+const { attachGuild, guildSettings, postWebhook: sendWebhook } = require('./guild')
 const { watchOffline } = require('./offline')
 
 // Change this one value to move to a newer Minecraft once mineflayer supports it.
@@ -396,7 +396,7 @@ class Manager extends EventEmitter {
       conns: this.conns,
       addressOf: conn => this.addressOf(conn),
       isUp: conn => conn.status === 'online' && !!conn.bot && !inCaptcha(conn) && !inMinehutLobby(conn.readSidebar?.()),
-      post: (...args) => (this.postWebhook ?? postWebhook)(...args),
+      post: (...args) => this.sendWebhook(...args),
       addChat: (conn, text) => this.addChat(conn, text)
     })
   }
@@ -575,6 +575,12 @@ class Manager extends EventEmitter {
       if (this.conns.has(id)) this.connect(id)
     }, start + i * gap).unref())
     return start + ids.length * gap
+  }
+
+  // The real Discord poster, or the one the self-check passes in. A method, not a lambda in the constructor:
+  // there the postWebhook option shadowed the imported function and every alert threw "is not a function".
+  sendWebhook (...args) {
+    return (this.postWebhook ?? sendWebhook)(...args)
   }
 
   shutdown () {
