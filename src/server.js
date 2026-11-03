@@ -74,6 +74,7 @@ function actions (manager) {
     setLobbyCommand: b => manager.setLobbyCommand(b.address, b.value),
     setGuild: b => manager.setGuild(b.id, b),
     runRanking: b => manager.runRanking(b.id),
+    runQuestRanking: b => manager.runQuestRanking(b.id),
     click: b => manager.click(b.id, b.slot, b.button),
     closeMenu: b => manager.closeMenu(b.id),
     selectHotbar: b => manager.selectHotbar(b.id, b.slot),

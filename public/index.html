@@ -30,7 +30,7 @@
   .map { max-width: 100%; image-rendering: pixelated; background: #14161a; border: 1px solid var(--line); }
   select { background: #14161a; color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px; font: inherit; }
   .field { display: flex; flex-direction: column; gap: 4px; align-items: stretch; }
-  .menu { margin: 0; padding: 4px; min-width: 160px; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px; }
+  .menu { margin: 0; padding: 4px; min-width: 160px; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px; max-height: calc(100vh - 16px); overflow-y: auto; } /* a popover is fixed: the page's scroll never reaches what hangs below the screen */
   .menu button { display: block; width: 100%; text-align: left; border: 0; background: none; }
   .menu button:hover { background: #2c3038; }
   .menu label { display: flex; padding: 4px 10px; color: var(--text); }
@@ -140,6 +140,7 @@
       <input id="menu-ranking-hook" type="url" class="guild-input" autocomplete="off" placeholder="https://discord.com/api/webhooks/...">
     </label>
     <button id="menu-run-ranking" type="button">Rodar ranking agora</button>
+    <button id="menu-run-quest-ranking" type="button" title="Posts (or edits) the quest ranking now, from a fresh /guild">Rodar ranking de quests agora</button>
     <div id="menu-guild-error" class="error" role="alert"></div>
   </fieldset>
   <fieldset title="Posts when this account has been out of the server for 3 minutes (disconnected, reconnecting, on a captcha or stuck in the Minehut lobby), and again when it is back. Disconnect with the button: no post. Empty turns it off.">
@@ -336,7 +337,8 @@ function openPopover (id, button) {
   menu.showPopover()
   const box = button.getBoundingClientRect()
   menu.style.left = `${Math.max(8, box.right - menu.offsetWidth)}px`
-  menu.style.top = `${box.bottom + 4}px`
+  // under the button when it fits, else moved up until it does (taller than the screen: it scrolls inside)
+  menu.style.top = `${Math.max(8, Math.min(box.bottom + 4, innerHeight - menu.offsetHeight - 8))}px`
 }
 
 function openDialog (id) {
@@ -419,6 +421,9 @@ for (const input of document.querySelectorAll('.guild-input')) {
 }
 $('menu-run-ranking').onclick = () => act('runRanking', { id: menuServer.id })
   .then(() => { $('menu-guild-error').textContent = 'Ranking started, progress in the chat of Launch' })
+  .catch(err => { $('menu-guild-error').textContent = err.message })
+$('menu-run-quest-ranking').onclick = () => act('runQuestRanking', { id: menuServer.id })
+  .then(() => { $('menu-guild-error').textContent = 'Quest ranking started, progress in the chat of Launch' })
   .catch(err => { $('menu-guild-error').textContent = err.message })
 $('menu-remove-server').onclick = () => {
   $('server-menu').hidePopover()

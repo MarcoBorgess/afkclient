@@ -479,21 +479,40 @@ function attachGuild (manager, conn, bot, { ready, plain, lines, toText }) {
     const baseline = new Map(Object.entries(guild.rankedAt))
     if ((newHour || (allDone && guild.allDoneAt !== found.endsAt)) && members.some(m => m.quests > (baseline.get(m.name) ?? m.quests))) {
       if (allDone) guild.allDoneAt = found.endsAt
-      const players = members.map(m => ({ ...m, delta: m.quests - (baseline.get(m.name) ?? m.quests) }))
-        .sort((a, b) => b.quests - a.quests || b.delta - a.delta)
       const shownHour = allDone && !newHour ? found : previous ?? found
-      const footer = `Quests da hora: ${counted(shownHour.quests).filter(q => q.done).length}/${counted(shownHour.quests).length} · Guild Points ${found.points}`
-      // One message, edited every time (a new webhook or a deleted message starts a new one), in the ranking
-      // channel with the 3-hour ranking; the quests channel only while no ranking webhook is set.
-      // Same look as the 3-hour "Guild Ranking": an embed with the picture in it.
-      guild.questRankingMessage = await post(guild.rankingWebhook || guild.trackWebhook, await podiumImage(players, questLayout(players, footer)), 'quests.png', {
-        embeds: [{ title: 'Quest Ranking', color: 0xe6b422, timestamp: new Date().toISOString(), image: { url: 'attachment://quests.png' } }]
-      }, guild.questRankingMessage) ?? guild.questRankingMessage
+      await postQuestRanking(members, baseline, hourFooter(shownHour, found.points))
       guild.rankedAt = counts()
       manager.save()
-      log('Quest ranking updated')
     }
   }
+
+  const hourFooter = (hour, points) => {
+    const counted = hour.quests.filter(q => !/play/i.test(q.name))
+    return `Quests da hora: ${counted.filter(q => q.done).length}/${counted.length} · Guild Points ${points}`
+  }
+
+  // One message, edited every time (a new webhook or a deleted message starts a new one), in the ranking
+  // channel with the 3-hour ranking; the quests channel only while no ranking webhook is set.
+  // Same look as the 3-hour "Guild Ranking": an embed with the picture in it.
+  async function postQuestRanking (members, baseline, footer) {
+    const guild = conn.server.guild
+    const players = members.map(m => ({ ...m, delta: m.quests - (baseline.get(m.name) ?? m.quests) }))
+      .sort((a, b) => b.quests - a.quests || b.delta - a.delta)
+    guild.questRankingMessage = await post(guild.rankingWebhook || guild.trackWebhook, await podiumImage(players, questLayout(players, footer)), 'quests.png', {
+      embeds: [{ title: 'Quest Ranking', color: 0xe6b422, timestamp: new Date().toISOString(), image: { url: 'attachment://quests.png' } }]
+    }, guild.questRankingMessage) ?? guild.questRankingMessage
+    manager.save()
+    log('Quest ranking updated')
+  }
+
+  // The page's button: the quest ranking now, from a fresh /guild. The "+N" baseline is left alone,
+  // so the hour's own ranking still shows everything done since the last one.
+  conn.runQuestRanking = () => (async () => {
+    const members = await exclusive(readGuild)
+    remember(members)
+    const baseline = new Map(Object.entries(conn.server.guild.rankedAt ?? {}))
+    await postQuestRanking(members, baseline, conn.guildQuests ? hourFooter(conn.guildQuests, conn.guildQuests.points) : '')
+  })().catch(err => log(`Quest ranking failed: ${err.message}`))
 
   // The members are kept even when the quests menu fails.
   async function readAgain () {
@@ -605,6 +624,7 @@ function attachGuild (manager, conn, bot, { ready, plain, lines, toText }) {
     clearInterval(timer)
     clearTimeout(resetTimer)
     conn.runRanking = null
+    conn.runQuestRanking = null
   }
 }
 

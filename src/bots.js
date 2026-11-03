@@ -519,6 +519,13 @@ class Manager extends EventEmitter {
     conn.runRanking()
   }
 
+  runQuestRanking (id) {
+    const conn = this.conn(id)
+    if (!conn.server.guild?.rankingWebhook && !conn.server.guild?.trackWebhook) throw new Error('Paste the ranking webhook first')
+    if (conn.status !== 'online' || !conn.runQuestRanking) throw new Error('This connection is not online')
+    conn.runQuestRanking()
+  }
+
   setButtons (address, buttons) {
     this.checkKnownAddress(address)
     if (!Array.isArray(buttons)) throw new Error('Invalid buttons')

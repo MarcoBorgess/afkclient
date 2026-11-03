@@ -967,9 +967,18 @@ async function guildFlow (dataDir) {
   manager.runRanking(id)
   await until('ranking edited', () => posts.length === 2, 20000)
   assert.equal(posts[1].messageId, rankingId, 'the next ranking edits the same message')
+  // The page's quest ranking button: now, edits the quest ranking message.
+  const questRankingId = saved().questRankingMessage
+  manager.runQuestRanking(id)
+  await until('quest ranking from the button', () => posts.length === 3, 20000)
+  assert.equal(posts[2].filename, 'quests.png')
+  assert.equal(posts[2].messageId, questRankingId, 'the same quest ranking message')
+  assert.equal(posts[2].url, 'https://discord.com/api/webhooks/1/ranking')
+  await until('lock released', () => !conn.running)
   manager.disconnect(id)
   await until('offline', () => conn.status === 'offline')
   assert.throws(() => manager.runRanking(id), /not online/)
+  assert.throws(() => manager.runQuestRanking(id), /not online/)
   server.close()
 }
 
