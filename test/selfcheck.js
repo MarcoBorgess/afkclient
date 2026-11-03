@@ -755,6 +755,11 @@ async function guildRules () {
   const withDoer = guild.questsMessage(read, null, NaN, '', { 'play for 15 minutes': '_raysz' }).embeds[0].description.split('\n')
   assert.equal(withDoer[2], '✅ **Playtime** — ~~Play for 15 minutes~~ · 5 pts — **\\_raysz**', 'who did it, nick not italic')
   assert.equal(withDoer[1], '✅ **Farming #2** — ~~Farm 7,500 Pineapple~~ · 125 pts', 'done, nobody known')
+  const wave = { tasks: { 'FARMING QUEST #1': 'Farm 1 Wheat', 'MOB QUEST #1': 'Kill 5 Cows' } }
+  assert.deepEqual(guild.trackRerolls(wave, [{ name: 'FARMING QUEST #1', task: 'Farm 2 Wheat' }, { name: 'MOB QUEST #1', task: 'Kill 5 Cows' }]), ['FARMING QUEST #1: Farm 1 Wheat -> Farm 2 Wheat'], 'a reroll is noticed')
+  assert.deepEqual(guild.trackRerolls(wave, [{ name: 'FARMING QUEST #1', task: 'Farm 2 Wheat' }]), [], 'and only once')
+  assert.equal(guild.questsMessage(read, null, NaN, '', {}, { 'FARMING QUEST #1': 'Farm 1 Wheat' }).embeds[0].description.split('\n')[0],
+    '⛏ **Farming #1** — Farm 3,000 Black Paint · 50 pts · 🔄 era ~~Farm 1 Wheat~~')
   assert.equal(message.embeds[0].footer.text, 'Hora passada: 1/2 feitas · Guild Points 2571')
   assert.equal(guild.questsMessage(read, null, NaN, '').content, '', 'no role, no ping')
   assert.throws(() => guild.guildSettings({}, { roleId: '<@&12>' }), /Role ID/)
@@ -832,7 +837,8 @@ async function guildFlow (dataDir) {
     if (Date.now() >= hour.resetAt) Object.assign(hour, { resetAt: Date.now() + 3600000, set: hour.set + 1, done: [false, false] })
     const left = Math.ceil((hour.resetAt - Date.now()) / 1000)
     const quest = (n, done) => item(done ? 'written_book' : 'book', named(`(⏺) FARMING QUEST #${n}`, ['Quest', `| Farm ${hour.set * 10 + n} Wheat`, `| Progress: ${done ? 5 : 0}/5`, 'Reward', '| 50 Guild Points']))
-    return { 4: item('clock', named('QUEST INFO', ['Total Quests: 9', 'Guild Points: 100', 'New quests available in', `⌚ ${Math.floor(left / 60)}m ${left % 60}s!`])), 11: quest(1, hour.done[0]), 12: quest(2, hour.done[1]) }
+    return { 4: item('clock', named('QUEST INFO', ['Total Quests: 9', 'Guild Points: 100', 'New quests available in', `⌚ ${Math.floor(left / 60)}m ${left % 60}s!`])), 11: quest(1, hour.done[0]), 12: quest(2, hour.done[1]),
+      13: item('book', named('(⏺) PLAYTIME QUEST', ['Quest', '| Play for 30 minutes', '| Progress: 0/30', 'Reward', '| 10 Guild Points'])) } // never done: no reason to hold the ranking
   }
   const say = (sc, line) => sc.write('system_chat', { content: text(line), isActionBar: false })
   const command = sc => ({ command }) => {
@@ -894,7 +900,8 @@ async function guildFlow (dataDir) {
   assert.equal(posts[0].messageId, 'm1', 'the same message, edited')
   assert.deepEqual(posts[0].payload.embeds[0].description.split('\n'), [
     '✅ **Farming #1** — ~~Farm 11 Wheat~~ · 50 pts',
-    '✅ **Farming #2** — ~~Farm 12 Wheat~~ · 50 pts — **p4rme**'
+    '✅ **Farming #2** — ~~Farm 12 Wheat~~ · 50 pts — **p4rme**',
+    '⏱ **Playtime** — Play for 30 minutes · 10 pts'
   ])
   assert.equal(posts[1].filename, 'quests.png')
   assert.equal(posts[1].url, 'https://discord.com/api/webhooks/1/ranking', 'the quest ranking goes to the ranking channel')

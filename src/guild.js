@@ -240,18 +240,40 @@ async function podiumImage (players, layout = COMPLETION_LAYOUT) {
   return canvas.encode('png')
 }
 
+// The hour's tasks as announced, to notice a reroll (one every 15 minutes, nothing in chat says so).
+const rerollState = quests => ({ tasks: Object.fromEntries(quests.map(q => [q.name, q.task])), rerolled: {} })
+
+// @return the quests whose task changed since the last read ("Farming #1: A -> B"); wave.rerolled keeps the old task
+function trackRerolls (wave, quests) {
+  wave.tasks ??= {}
+  wave.rerolled ??= {}
+  const changed = []
+  for (const q of quests) {
+    const before = wave.tasks[q.name]
+    if (before && before !== q.task) {
+      wave.rerolled[q.name] = before
+      changed.push(`${q.name}: ${before} -> ${q.task}`)
+    }
+    wave.tasks[q.name] = q.task
+  }
+  return changed
+}
+
 // The hour's message: text, so the role ping works and it reads well on a phone. Posted at the reset, then edited:
-// a done quest gets a check and who did it (doers: task -> names, from the chat line and the /guild count).
-function questsMessage ({ quests, endsAt }, previous, points, roleId, doers = {}) {
+// a done quest gets a check and who did it (doers: task -> names, from the chat line and the /guild count),
+// a rerolled one what it was before (rerolled: quest name -> old task; the server does not say who).
+function questsMessage ({ quests, endsAt }, previous, points, roleId, doers = {}, rerolled = {}) {
   const icon = name => /farm/i.test(name) ? '⛏' : /mob/i.test(name) ? '⚔' : /play/i.test(name) ? '⏱' : '•'
   const label = name => name.replace(/\s*quest\s*/i, ' ').trim().toLowerCase().replace(/^\w/, c => c.toUpperCase())
   const markdown = text => String(text).replace(/[_*~`|\\]/g, c => `\\${c}`) // nicks like _raysz must not turn italic
   const doer = q => Object.entries(doers).find(([task]) => task.toLowerCase() === q.task.toLowerCase())?.[1]
+  const was = q => rerolled[q.name] ? ` · 🔄 era ~~${rerolled[q.name]}~~` : ''
   const line = q => q.done
-    ? `✅ **${label(q.name)}** — ~~${q.task}~~ · ${q.points} pts${doer(q) ? ` — **${markdown(doer(q))}**` : ''}`
-    : `${icon(q.name)} **${label(q.name)}** — ${q.task} · ${q.points} pts`
+    ? `✅ **${label(q.name)}** — ~~${q.task}~~ · ${q.points} pts${doer(q) ? ` — **${markdown(doer(q))}**` : ''}${was(q)}`
+    : `${icon(q.name)} **${label(q.name)}** — ${q.task} · ${q.points} pts${was(q)}`
   const until = endsAt ? ` (até ${new Date(endsAt - 3 * 3600000).toISOString().slice(11, 16)})` : ''
-  const footer = [previous ? `Hora passada: ${previous.quests.filter(q => q.done).length}/${previous.quests.length} feitas` : '', Number.isFinite(points) ? `Guild Points ${points}` : ''].filter(Boolean).join(' · ')
+  const lastHour = previous?.quests.filter(q => !/play/i.test(q.name ?? '')) // playtime left out, as in the ranking
+  const footer = [lastHour ? `Hora passada: ${lastHour.filter(q => q.done).length}/${lastHour.length} feitas` : '', Number.isFinite(points) ? `Guild Points ${points}` : ''].filter(Boolean).join(' · ')
   return {
     content: roleId ? `<@&${roleId}>` : '',
     allowed_mentions: { roles: roleId ? [roleId] : [] },
@@ -397,21 +419,27 @@ function attachGuild (manager, conn, bot, { ready, plain, lines, toText }) {
     conn.guildQuests = found
     const announced = settings().announced ?? 0
     const newHour = found.endsAt && Math.abs(found.endsAt - announced) > SAME_HOUR
-    const allDone = found.quests.every(q => q.done)
+    const counted = quests => quests.filter(q => !/play/i.test(q.name)) // playtime never holds the quest ranking back
+    const allDone = counted(found.quests).every(q => q.done)
     const guild = conn.server.guild
     if (newHour) {
       guild.announced = found.endsAt
       guild.wave = null // the old hour's message is never edited with the new quests, even if this post fails
       manager.save()
       // previous is only the last hour when it was read before this hour began
-      const last = previous?.endsAt && Math.abs(previous.endsAt - found.endsAt) > SAME_HOUR ? { quests: previous.quests.map(q => ({ done: q.done })) } : null
+      const last = previous?.endsAt && Math.abs(previous.endsAt - found.endsAt) > SAME_HOUR ? { quests: previous.quests.map(q => ({ name: q.name, done: q.done })) } : null
       const message = questsMessage(found, last, found.points, guild.roleId)
-      guild.wave = { endsAt: found.endsAt, last, doers: {}, messageId: await post(guild.trackWebhook, null, null, message) }
+      guild.wave = { endsAt: found.endsAt, last, doers: {}, ...rerollState(found.quests), messageId: await post(guild.trackWebhook, null, null, message) }
       waveShown = JSON.stringify(message)
       manager.save()
       log(`New quests posted: ${found.quests.map(q => q.task).join(', ')}`)
     } else if (guild.wave?.messageId) { // the wave is always the announced hour's: set together above
-      const message = questsMessage(found, guild.wave.last, found.points, guild.roleId, guild.wave.doers)
+      const rerolls = trackRerolls(guild.wave, found.quests)
+      if (rerolls.length) {
+        manager.save()
+        log(`Rerolled: ${rerolls.join(', ')}`)
+      }
+      const message = questsMessage(found, guild.wave.last, found.points, guild.roleId, guild.wave.doers, guild.wave.rerolled)
       const shown = JSON.stringify(message)
       if (shown !== waveShown) {
         const messageId = await post(guild.trackWebhook, null, null, message, guild.wave.messageId)
@@ -426,22 +454,25 @@ function attachGuild (manager, conn, bot, { ready, plain, lines, toText }) {
       clearTimeout(resetTimer)
       resetTimer = setTimeout(() => readAgain().catch(err => log(`Reading /guild quests failed: ${err.message}`)), Math.max(0, found.endsAt - Date.now()) + timing.afterReset)
     }
-    const baseline = conn.guildRankedAt
-    if (!baseline) {
-      conn.guildRankedAt = new Map(members.map(m => [m.name, m.quests]))
+    // Saved, not in memory: a restart no longer forgets the quests done since the last ranking.
+    const counts = () => Object.fromEntries(members.map(m => [m.name, m.quests]))
+    if (!guild.rankedAt) {
+      guild.rankedAt = counts()
+      manager.save()
       return
     }
-    if ((newHour || (allDone && conn.guildAllDone !== found.endsAt)) && members.some(m => m.quests > (baseline.get(m.name) ?? m.quests))) {
-      if (allDone) conn.guildAllDone = found.endsAt
+    const baseline = new Map(Object.entries(guild.rankedAt))
+    if ((newHour || (allDone && guild.allDoneAt !== found.endsAt)) && members.some(m => m.quests > (baseline.get(m.name) ?? m.quests))) {
+      if (allDone) guild.allDoneAt = found.endsAt
       const players = members.map(m => ({ ...m, delta: m.quests - (baseline.get(m.name) ?? m.quests) }))
         .sort((a, b) => b.quests - a.quests || b.delta - a.delta)
       const shownHour = allDone && !newHour ? found : previous ?? found
-      const footer = `Quests da hora: ${shownHour.quests.filter(q => q.done).length}/${shownHour.quests.length} · Guild Points ${found.points}`
+      const footer = `Quests da hora: ${counted(shownHour.quests).filter(q => q.done).length}/${counted(shownHour.quests).length} · Guild Points ${found.points}`
       // One message, edited every time (a new webhook or a deleted message starts a new one), in the ranking
       // channel with the 3-hour ranking; the quests channel only while no ranking webhook is set.
       guild.questRankingMessage = await post(guild.rankingWebhook || guild.trackWebhook, await podiumImage(players, questLayout(players, footer)), 'quests.png', {}, guild.questRankingMessage) ?? guild.questRankingMessage
+      guild.rankedAt = counts()
       manager.save()
-      conn.guildRankedAt = new Map(members.map(m => [m.name, m.quests]))
       log('Quest ranking updated')
     }
   }
@@ -576,4 +607,4 @@ function guildSettings (current = {}, { track, trackWebhook, roleId, ranking, ra
   return next
 }
 
-module.exports = { WEBHOOK, postWebhook, attachGuild, guildSettings, readMembers, readQuests, questRank, questRises, findValue, numberValue, rankingSlot, podiumImage, questLayout, questsMessage, skinUrl }
+module.exports = { WEBHOOK, postWebhook, trackRerolls, attachGuild, guildSettings, readMembers, readQuests, questRank, questRises, findValue, numberValue, rankingSlot, podiumImage, questLayout, questsMessage, skinUrl }
