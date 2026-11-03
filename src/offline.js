@@ -1,5 +1,5 @@
 // "Caiu" alert: a bot that should be in the game (not disconnected with the button) and has been out for 3 minutes
-// straight - disconnected, reconnecting, or parked in the Minehut lobby - posts once to its server's webhook,
+// straight - disconnected, reconnecting, stuck on a captcha, or parked in the Minehut lobby - posts once to its server's webhook,
 // and posts again when it is back. The webhook is per server per account: conn.server.guild.offlineWebhook.
 
 const DOWN_AFTER = 3 * 60000
@@ -31,7 +31,8 @@ function watchOffline (manager) {
       conn.offline = step.state
       const url = conn.server.guild?.offlineWebhook
       if (!step.post || !url) continue
-      const payload = offlineMessage(step.post, conn.account.name, manager.addressOf(conn), conn.message)
+      const reason = conn.status === 'online' && conn.captcha ? 'Captcha: responda no site' : conn.message
+      const payload = offlineMessage(step.post, conn.account.name, manager.addressOf(conn), reason)
       manager.post(url, null, null, payload).catch(err => manager.addChat(conn, `[offline] Discord: ${err.message}`))
     }
   }, CHECK_EVERY)

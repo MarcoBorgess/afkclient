@@ -395,7 +395,7 @@ class Manager extends EventEmitter {
     this.offlineTimer = watchOffline({
       conns: this.conns,
       addressOf: conn => this.addressOf(conn),
-      isUp: conn => conn.status === 'online' && !!conn.bot && !inMinehutLobby(conn.readSidebar?.()),
+      isUp: conn => conn.status === 'online' && !!conn.bot && !inCaptcha(conn) && !inMinehutLobby(conn.readSidebar?.()),
       post: (...args) => (this.postWebhook ?? postWebhook)(...args),
       addChat: (conn, text) => this.addChat(conn, text)
     })
