@@ -497,6 +497,7 @@ async function endToEnd (dataDir) {
   assert.equal(light.skyLight, undefined, 'chunk light is dropped')
   assert.equal(conn.bot._client.listenerCount('update_light'), 0, 'light updates are ignored')
   await until('server chat line', () => conn.chat.some(c => c.text === 'hello from server'))
+  assert.equal(conn.bot._client._lastChatHistory.length, 0, 'no chat report history is kept')
   await until('tick_end after a position', () => doubleMoves.seen > 0 && doubleMoves.ticks > 0)
   manager.addChat(conn, 'x'.repeat(5000))
   assert.equal(conn.chat.at(-1).text.length, 2000, 'long lines are cut')

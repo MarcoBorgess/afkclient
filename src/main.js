@@ -56,6 +56,12 @@ server.on('listening', () => {
   users.autoConnectAll()
   checkOutgoingIp()
   setInterval(checkOutgoingIp, IP_CHECK).unref()
+  // heap = JS objects, external = Buffers and native (chunks, canvas): tells which side grows when RSS climbs.
+  setInterval(() => {
+    const mb = n => Math.round(n / 1048576)
+    const { rss, heapUsed, heapTotal, external } = process.memoryUsage()
+    console.log(`${new Date().toISOString()} Memory: rss ${mb(rss)} MB, heap ${mb(heapUsed)}/${mb(heapTotal)} MB, external ${mb(external)} MB`)
+  }, IP_CHECK).unref()
 })
 
 // One bad packet from one server must not drop every other account.
