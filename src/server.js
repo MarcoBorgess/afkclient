@@ -15,12 +15,15 @@ const HEADERS = {
   'Cache-Control': 'no-store'
 }
 
-// "Authorization: Bearer <QUESTS_TOKEN>"; a missing or short token turns the endpoint off.
-function bearerOk (header, token) {
-  if (!token || token.length < 32) return false
-  const given = Buffer.from(/^Bearer (\S+)$/.exec(header ?? '')?.[1] ?? '')
-  const wanted = Buffer.from(token)
-  return given.length === wanted.length && crypto.timingSafeEqual(given, wanted)
+// "Authorization: Bearer <QUESTS_TOKEN>", or "X-Quests-Token: <QUESTS_TOKEN>" where a proxy eats Authorization.
+// @return null when it matches, else why not (says nothing about the token itself)
+function questsRefusal (headers, token) {
+  if (!token || token.length < 32) return 'QUESTS_TOKEN is not set on the server (or is under 32 characters)'
+  const sent = /^Bearer (\S+)$/.exec(headers.authorization ?? '')?.[1] ?? headers['x-quests-token'] ?? ''
+  if (!sent) return 'No token reached the server'
+  const given = Buffer.from(sent)
+  const wanted = Buffer.from(token.trim())
+  return given.length === wanted.length && crypto.timingSafeEqual(given, wanted) ? null : 'Wrong token'
 }
 
 // Blocks other websites from acting with a logged-in browser. GETs change nothing.
@@ -139,7 +142,8 @@ function startServer (users, { port, host = '127.0.0.1', allowedHosts, secure = 
       if (req.method === 'GET' && /^\/cat-(cream|tabby)\.png$/.test(url.pathname)) return file(url.pathname.slice(1), 'image/png')
       // Read-only, for the CobbleUtils mod's quest box: no session, a token of its own.
       if (req.method === 'GET' && url.pathname === '/api/quests') {
-        if (!bearerOk(req.headers.authorization, questsToken)) return json(401, { error: 'Bad token' })
+        const refusal = questsRefusal(req.headers, questsToken)
+        if (refusal) return json(401, { error: refusal })
         const found = users.guildQuests()
         return json(200, found
           ? { endsAt: found.endsAt, readAt: found.readAt, quests: found.quests.map(({ name, task, done }) => ({ name, task, done })) }
@@ -214,4 +218,4 @@ function startServer (users, { port, host = '127.0.0.1', allowedHosts, secure = 
   return server
 }
 
-module.exports = { startServer, isAllowedRequest, bearerOk }
+module.exports = { startServer, isAllowedRequest, questsRefusal }
