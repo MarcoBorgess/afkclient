@@ -357,6 +357,13 @@ async function multiUser (dataDir) {
   const again = new Users({ ...options, managerOptions: { flow: FakeFlow } })
   assert.deepEqual(again.overview().map(u => [u.name, u.accounts]), [['boss', 0], ['ann', 1], ['bob', 2]])
   assert.deepEqual(again.manager(again.overview()[1].id).settings(address).buttons, [{ label: 'Ann', steps: '/ann' }])
+  // ADMIN_PASSWORD still opens the admin account after its password changed on the page, and nobody else's.
+  await again.setPassword(again.overview().find(u => u.name === 'boss').id, 'a-new-boss-password')
+  assert(await again.login('boss', 'a-new-boss-password'), 'the new password')
+  assert(await again.login('Boss', 'boss-password'), 'ADMIN_PASSWORD recovers the admin account')
+  assert(await again.login('boss', 'a-new-boss-password'), 'and does not replace the saved password')
+  await assert.rejects(again.login('ann', 'boss-password'), /Wrong username or password/, 'not other accounts')
+  await assert.rejects(again.login('boss', 'boss-passwordx'), /Wrong username or password/)
   const annId = users.overview().find(u => u.name === 'ann').id
   const bossId = users.overview().find(u => u.name === 'boss').id
   assert.match((await admin('removeUser', { id: bossId })).data.error, /yourself/)
