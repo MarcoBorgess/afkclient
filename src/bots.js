@@ -644,6 +644,9 @@ class Manager extends EventEmitter {
       this.emit('changed', conn.server.id)
     }
     bot._client.on('login', () => { // a server switch leaves the old maps behind
+      // minecraft-protocol keeps the last 1024 chat and action bar packets per account, raw NBT, only for chat reports.
+      // Action bar resends fill it in minutes, megabytes per account; nothing here reports chat. It exists from login on.
+      if (bot._client._lastChatHistory) bot._client._lastChatHistory.capacity = 0
       conn.maps.clear()
       conn.frames.clear()
       mapsChanged()
