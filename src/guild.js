@@ -387,6 +387,7 @@ function attachGuild (manager, conn, bot, { ready, plain, lines, toText }) {
   // someone did a quest since the last one and the hour is over or all its quests are done.
   async function questsRead (found, members) {
     const previous = conn.guildQuests
+    found.readAt = Date.now() // GET /api/quests hands out the freshest read
     conn.guildQuests = found
     const announced = settings().announced ?? 0
     const newHour = found.endsAt && Math.abs(found.endsAt - announced) > SAME_HOUR

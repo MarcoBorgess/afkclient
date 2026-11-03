@@ -1,3 +1,4 @@
+const crypto = require('crypto')
 const fs = require('fs')
 const http = require('http')
 const path = require('path')
@@ -12,6 +13,14 @@ const HEADERS = {
   'Content-Security-Policy': "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' https://mc-heads.net; connect-src 'self'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'",
   'X-Content-Type-Options': 'nosniff',
   'Cache-Control': 'no-store'
+}
+
+// "Authorization: Bearer <QUESTS_TOKEN>"; a missing or short token turns the endpoint off.
+function bearerOk (header, token) {
+  if (!token || token.length < 32) return false
+  const given = Buffer.from(/^Bearer (\S+)$/.exec(header ?? '')?.[1] ?? '')
+  const wanted = Buffer.from(token)
+  return given.length === wanted.length && crypto.timingSafeEqual(given, wanted)
 }
 
 // Blocks other websites from acting with a logged-in browser. GETs change nothing.
@@ -78,7 +87,7 @@ function adminActions (users, userId) {
   }
 }
 
-function startServer (users, { port, host = '127.0.0.1', allowedHosts, secure = false }) {
+function startServer (users, { port, host = '127.0.0.1', allowedHosts, secure = false, questsToken }) {
   const COOKIE = cookieName(secure)
   const allowedOrigins = allowedHosts.map(allowed => `${secure ? 'https' : 'http'}://${allowed}`)
   const clients = new Map() // open /events stream -> { token, userId }
@@ -128,6 +137,14 @@ function startServer (users, { port, host = '127.0.0.1', allowedHosts, secure = 
       const url = new URL(req.url, 'http://localhost')
       if (req.method === 'GET' && url.pathname === '/login') return file('login.html', 'text/html; charset=utf-8')
       if (req.method === 'GET' && /^\/cat-(cream|tabby)\.png$/.test(url.pathname)) return file(url.pathname.slice(1), 'image/png')
+      // Read-only, for the CobbleUtils mod's quest box: no session, a token of its own.
+      if (req.method === 'GET' && url.pathname === '/api/quests') {
+        if (!bearerOk(req.headers.authorization, questsToken)) return json(401, { error: 'Bad token' })
+        const found = users.guildQuests()
+        return json(200, found
+          ? { endsAt: found.endsAt, readAt: found.readAt, quests: found.quests.map(({ name, task, done }) => ({ name, task, done })) }
+          : { endsAt: null, readAt: null, quests: [] })
+      }
       if (req.method === 'POST' && url.pathname === '/api/login') {
         const { name, password } = await readJson(req)
         const token = await users.login(name, password)
@@ -197,4 +214,4 @@ function startServer (users, { port, host = '127.0.0.1', allowedHosts, secure = 
   return server
 }
 
-module.exports = { startServer, isAllowedRequest }
+module.exports = { startServer, isAllowedRequest, bearerOk }

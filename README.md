@@ -12,6 +12,7 @@ The app reads these environment variables:
 |---|---|
 | `TOKEN_KEY` | Random secret that encrypts the saved Microsoft logins. Changing it makes every account sign in again. Generate one with `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"` |
 | `PUBLIC_HOSTS` | The site's address, comma separated, without `https://`. For example `afkparmegio.squareweb.app,afk.parmegio.com` |
+| `QUESTS_TOKEN` | Optional, 32+ characters. Turns on `GET /api/quests` (header `Authorization: Bearer <token>`): the freshest /guild quests a bot read, for the CobbleUtils quest box. Unset, the endpoint answers 401. |
 | `ADMIN_USER` | Name of the first user, created on the first start |
 | `ADMIN_PASSWORD` | That user's password, at least 12 characters. Delete this variable after the first login |
 | `ALLOWED_SERVERS` | Optional. Servers people can connect to, comma separated, exact or like `*.example.com`. Defaults to `cobblestone.gg,*.cobblestone.gg,minehut.gg,*.minehut.gg` |

@@ -46,7 +46,7 @@ function quit () {
   setTimeout(() => process.exit(0), 500) // lets the disconnect packets go out
 }
 
-const server = startServer(users, { port: PORT, host: HOST, allowedHosts, secure: !LOCAL })
+const server = startServer(users, { port: PORT, host: HOST, allowedHosts, secure: !LOCAL, questsToken: process.env.QUESTS_TOKEN })
 
 server.on('listening', () => {
   console.log(`${new Date().toISOString()} AFK Client is running on ${HOST}:${PORT}`)
