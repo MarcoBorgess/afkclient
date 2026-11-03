@@ -762,7 +762,10 @@ class Manager extends EventEmitter {
     for (const event of ['windowOpen', 'windowClose', 'health', 'move', 'teamUpdated', 'teamCreated', 'teamMemberAdded']) {
       bot.on(event, () => this.emit('changed', conn.server.id))
     }
+    // Nothing here reads light, and it is most of each chunk's memory.
+    bot._client.prependListener('map_chunk', packet => { packet.skyLight = undefined })
     bot.once('inject_allowed', () => {
+      bot._client.removeAllListeners('update_light') // mineflayer's, added just before this
       bot.inventory.on('updateSlot', () => this.emit('changed', conn.server.id))
     })
     bot.on('windowOpen', window => {
