@@ -806,7 +806,7 @@ async function guildFlow (dataDir) {
     dataDir,
     tokens: { factory: () => { throw new Error('unused') }, remove: async () => {} },
     botOptions: { auth: 'offline', username: 'p4rme' },
-    guildTiming: { ready: 200, questDelay: 200, questRetries: [300, 300], statsGap: [50, 100], cooldownStep: 100, cooldownMax: 200, afterReset: 100 },
+    guildTiming: { ready: 200, questDelay: 200, questRetries: [300, 300], statsGap: [50, 100], cooldownStep: 100, cooldownMax: 200, afterReset: 100, menuTimeout: 1500, menuTries: [0, 100, 100] },
     postWebhook: async (url, png, filename, payload, messageId) => { posts.push({ url, png, filename, payload, messageId }); return messageId ?? `m${++sent}` }
   })
   manager.config.accounts.push({ id: 'a1', name: 'p4rme', uuid: 'u', servers: [] })
@@ -823,6 +823,7 @@ async function guildFlow (dataDir) {
     sc.write('window_items', { windowId: 5, stateId: 1, items: Array.from({ length: 90 }, (_, i) => slots[i] ?? { itemCount: 0 }), carriedItem: { itemCount: 0 } })
   }
   let cooled = false
+  let ignoreQuests = 1
   // The hour ends at resetAt, then a new set of quests starts.
   const hour = { resetAt: Date.now() + 3600000, set: 1, done: [false, false] }
   // Ends the announced hour early: the server shows the new countdown, the client already announced that hour.
@@ -835,7 +836,7 @@ async function guildFlow (dataDir) {
   }
   const say = (sc, line) => sc.write('system_chat', { content: text(line), isActionBar: false })
   const command = sc => ({ command }) => {
-    if (command === 'guild quests') show(sc, 'Guild Quests', questMenu())
+    if (command === 'guild quests' && ignoreQuests-- <= 0) show(sc, 'Guild Quests', questMenu()) // the first one never opens, as on p4rme
     if (command === 'guild') show(sc, 'Guild Info | test', { 4: item('player_head', [...named('GUILD INFO', ['x']), { type: 'profile', data: { type: 'partial', name: 'eggenjoyer', properties: [], skinPatch: {} } }]), 11: memberHead('parmegio'), 12: memberHead('p4rme'), 13: memberHead('D1NN0') })
     const stats = /^stats (\w+)$/.exec(command)
     if (!stats) return
@@ -858,6 +859,7 @@ async function guildFlow (dataDir) {
   await until('first reads', () => posts.length === 1)
   assert.equal(conn.guildMembers.size, 3)
   assert.equal(manager.detail(id).menu, null, 'menu closed after reading')
+  assert(conn.chat.some(line => line.text === '[guild] /guild quests showed no quests, trying again'), 'asked again when it did not open')
   assert.equal(posts[0].png, null, 'this hour\'s quests, as a message')
   assert.equal(posts[0].payload.content, '<@&424242424242>')
   assert.match(posts[0].payload.embeds[0].description, /Farm 11 Wheat/)
@@ -873,7 +875,7 @@ async function guildFlow (dataDir) {
   say(server.lastClient, 'GUILDS • Guild received 10 Points')
   setTimeout(() => { quests.D1NN0 = 17 }, 400)
   await until('who did it', () => conn.chat.some(line => line.text === '[guild] D1NN0 completed Play for 30 minutes'), 10000)
-  await until('quests menu read after it', () => chats.filter(c => c === '/guild quests').length === 2)
+  await until('quests menu read after it', () => chats.filter(c => c === '/guild quests').length === 3, 10000)
   await until('lock released', () => !conn.running)
   assert.equal(saved().wave.doers['Play for 30 minutes'], 'D1NN0')
   assert.equal(chats.filter(c => c === '/guild').length, 3, 'snapshot, then the first check found nothing, then the retry')

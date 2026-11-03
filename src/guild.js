@@ -24,7 +24,9 @@ const DEFAULT_TIMING = {
   cooldownStep: 2000,
   cooldownMax: 10000,
   maxCooldowns: 8,
-  afterReset: AFTER_RESET
+  afterReset: AFTER_RESET,
+  menuTimeout: MENU_TIMEOUT,
+  menuTries: [0, 2000, 5000] // /guild quests right after /guild sometimes never opens (p4rme, 2026-11-03)
 }
 const NUMBER = /(\d[\d,]*(?:\.\d+)?)\s*([kmbt%])?(?![a-z])/i
 const between = ([min, max]) => min + Math.random() * (max - min)
@@ -336,7 +338,7 @@ function attachGuild (manager, conn, bot, { ready, plain, lines, toText }) {
 
   // gaveUp: an answer in chat that means no menu is coming.
   async function settledWindow (wanted, gaveUp = () => null) {
-    const end = Date.now() + MENU_TIMEOUT
+    const end = Date.now() + timing.menuTimeout
     let last = null
     let since = 0
     while (Date.now() < end) {
@@ -373,13 +375,18 @@ function attachGuild (manager, conn, bot, { ready, plain, lines, toText }) {
     conn.guildMembers = new Map(members.map(m => [m.name, m]))
   }
 
+  // Asked again when it does not open: each try first closes whatever is open, so a menu that came late is not left up.
   async function readQuestMenu () {
-    manager.closeMenu(id)
-    manager.send(id, '/guild quests')
-    const found = await settledWindow((window, slots) => readQuests(slots))
-    manager.closeMenu(id)
-    if (!found?.quests.length) throw new Error('/guild quests showed no quests')
-    return found
+    for (const delay of timing.menuTries) {
+      await wait(delay)
+      manager.closeMenu(id)
+      manager.send(id, '/guild quests')
+      const found = await settledWindow((window, slots) => readQuests(slots))
+      manager.closeMenu(id)
+      if (found?.quests.length) return found
+      log('/guild quests showed no quests, trying again')
+    }
+    throw new Error('/guild quests showed no quests')
   }
 
   // After every /guild quests read: the reset message once per hour, the quest ranking whenever
