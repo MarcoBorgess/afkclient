@@ -115,6 +115,17 @@ class Users extends EventEmitter {
     return user
   }
 
+  // The freshest /guild quests read of any bot, for GET /api/quests (the CobbleUtils mod).
+  guildQuests () {
+    let best = null
+    for (const manager of this.managers.values()) {
+      for (const conn of manager.conns.values()) {
+        if (conn.guildQuests?.readAt && conn.guildQuests.readAt > (best?.readAt ?? 0)) best = conn.guildQuests
+      }
+    }
+    return best
+  }
+
   manager (id) {
     return this.managers.get(id)
   }

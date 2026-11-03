@@ -10,9 +10,11 @@ const mc = require('minecraft-protocol')
 const nbt = require('prismarine-nbt')
 const { computeChatChecksum } = require('minecraft-protocol/src/datatypes/checksums')
 const { Manager, VERSION, belowShown, blocksReconnect, fillAmounts, parseSteps, serverName, showsAddress, chatLine, toSignedByte, windowChecksum, isNetworkError, nextDelay, parseAddress } = require('../src/bots')
-const { isAllowedRequest, startServer } = require('../src/server')
+const { isAllowedRequest, startServer, questsRefusal } = require('../src/server')
 const { createTokenStore } = require('../src/tokenCache')
 const { Users } = require('../src/users')
+const guild = require('../src/guild')
+const { offlineStep, offlineMessage, DOWN_AFTER } = require('../src/offline')
 
 const PORT = 25598
 const WEB_PORT = 25597
@@ -106,11 +108,52 @@ function groupRules () {
   assert.throws(() => parseSteps('  \n'), /Nothing to run/)
 }
 
+// The "caiu" alert: 3 minutes out in a row, once, then "voltou"; stopping with the button never posts.
+function offlineChecks () {
+  let state = {}
+  const step = (wanted, up, at) => { const r = offlineStep(state, { wanted, up }, at); state = r.state; return r.post }
+  assert.equal(step(true, true, 0), null, 'online')
+  assert.equal(step(true, false, 1000), null, 'just dropped')
+  assert.equal(step(true, false, 1000 + DOWN_AFTER - 1), null, 'not 3 minutes yet')
+  assert.deepEqual(step(true, false, 1000 + DOWN_AFTER), { kind: 'down' }, '3 minutes out')
+  assert.equal(step(true, false, 1000 + DOWN_AFTER + 60000), null, 'posted once')
+  assert.deepEqual(step(true, true, 1000 + 12 * 60000), { kind: 'back', downFor: 12 * 60000 }, 'back online')
+  assert.equal(step(true, true, 13 * 60000), null, 'nothing while up')
+  assert.equal(step(true, false, 14 * 60000), null)
+  assert.equal(step(true, true, 15 * 60000), null, 'a 1-minute blip posts nothing')
+  step(true, false, 16 * 60000)
+  assert.equal(step(false, false, 16 * 60000 + DOWN_AFTER), null, 'disconnected with the button')
+  assert.equal(step(true, false, 16 * 60000 + DOWN_AFTER + 1000), null, 'the 3 minutes start again after the button')
+  assert.match(offlineMessage({ kind: 'down' }, 'parmegio', 'cobblestone.minehut.gg', 'Kicked: Server restarting').content, /parmegio.*cobblestone\.minehut\.gg.*Server restarting/)
+  assert.match(offlineMessage({ kind: 'back', downFor: 12 * 60000 }, 'parmegio', 'cobblestone.minehut.gg').content, /voltou.*12 min/)
+  assert.equal(guild.guildSettings({}, { offlineWebhook: ' https://discord.com/api/webhooks/1/abc ' }).offlineWebhook, 'https://discord.com/api/webhooks/1/abc')
+  assert.throws(() => guild.guildSettings({}, { offlineWebhook: 'https://evil.com/x' }), /Aviso de queda/)
+
+  // OFFLINE_WEBHOOK fills the servers that never had the field, and leaves a cleared one alone.
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'afkclient-offline-'))
+  const hook = 'https://discord.com/api/webhooks/1/default'
+  const servers = [{ id: 'a', host: 'x.gg' }, { id: 'b', host: 'x.gg', guild: { offlineWebhook: '' } }, { id: 'c', host: 'x.gg', guild: { track: true } }]
+  fs.writeFileSync(path.join(dataDir, 'config.json'), JSON.stringify({ accounts: [{ name: 'n', uuid: 'u', servers }] }))
+  const manager = new Manager({ dataDir, tokens: {}, defaultOfflineWebhook: hook })
+  manager.shutdown()
+  const saved = JSON.parse(fs.readFileSync(path.join(dataDir, 'config.json'), 'utf8')).accounts[0].servers
+  assert.deepEqual(saved.map(s => s.guild?.offlineWebhook), [hook, '', hook], 'default only where never set, and saved')
+  assert.equal(saved[2].guild.track, true, 'other guild settings kept')
+  fs.rmSync(dataDir, { recursive: true, force: true })
+}
+
 function requestChecks () {
   const req = (method, headers) => ({ method, headers })
   const hosts = ['https://afk.example.com']
   const json = 'application/json'
   const origin = 'https://afk.example.com'
+  const secret = 'q'.repeat(40)
+  assert.equal(questsRefusal({ authorization: `Bearer ${secret}` }, secret), null, 'quests token')
+  assert.equal(questsRefusal({ 'x-quests-token': secret }, `${secret}
+`), null, 'token header, env value with a newline')
+  assert.equal(questsRefusal({ authorization: `Bearer ${secret}x` }, secret), 'Wrong token')
+  assert.equal(questsRefusal({}, secret), 'No token reached the server')
+  assert.match(questsRefusal({ authorization: 'Bearer short' }, 'short'), /not set/, 'a short QUESTS_TOKEN disables /api/quests')
   assert(isAllowedRequest(req('GET', {}), hosts))
   assert(isAllowedRequest(req('POST', { origin, 'content-type': json }), hosts))
   assert(!isAllowedRequest(req('POST', { origin: 'https://evil.com', 'content-type': json }), hosts), 'other website')
@@ -442,6 +485,10 @@ async function endToEnd (dataDir) {
 
   manager.connect(id)
   await until('spawn', () => conn.status === 'online')
+  const light = { skyLight: [[1]] }
+  conn.bot._client.emit('map_chunk', light)
+  assert.equal(light.skyLight, undefined, 'chunk light is dropped')
+  assert.equal(conn.bot._client.listenerCount('update_light'), 0, 'light updates are ignored')
   await until('server chat line', () => conn.chat.some(c => c.text === 'hello from server'))
   await until('tick_end after a position', () => doubleMoves.seen > 0 && doubleMoves.ticks > 0)
   manager.addChat(conn, 'x'.repeat(5000))
@@ -657,6 +704,274 @@ async function endToEnd (dataDir) {
   server.close()
 }
 
+// Real lines from the /guild dump (2026-11-02), as the menu reader receives them.
+const head = (name, lines, skin) => ({ id: 'player_head', lines, profile: { name, properties: skin ? [{ name: 'textures', value: Buffer.from(JSON.stringify({ textures: { SKIN: { url: skin } } })).toString('base64') }] : [] } })
+
+async function guildRules () {
+  const slots = [
+    { id: 'black_stained_glass_pane', lines: ['Black Stained Glass Pane'] },
+    head('eggenjoyer', ['GUILD INFO (10/10)', 'Guild Creation Date: 10/28/26'], 'http://textures.minecraft.net/texture/abc'),
+    head('parmegio', ['parmegio (Online)', 'Guild Owner', '874.08k Crops Farmed', '14 Quests Completed', 'Click to Open Stats'], 'http://textures.minecraft.net/texture/def'),
+    head('p4rme', ['p4rme (Online)', 'Elder', '18 Quests Completed']),
+    head('D1NN0', ['D1NN0 (Online)', 'Member', '15 Quests Completed'], 'http://evil.example/skin.png'),
+    head('Ernani_', ['Ernani_ (Online)', '31 Quests Completed']),
+    head('nxly_', ['nxly_ (Offline)', '15 Quests Completed'])
+  ]
+  const members = guild.readMembers(slots)
+  assert.deepEqual(members.map(m => [m.name, m.quests]), [['parmegio', 14], ['p4rme', 18], ['D1NN0', 15], ['Ernani_', 31], ['nxly_', 15]], 'icon heads are not members')
+  assert.equal(members[0].skin, 'http://textures.minecraft.net/texture/def')
+  assert.equal(members[0].crops, '874.08k')
+  assert.equal(members[2].skin, null, 'skins only from Mojang')
+  const rank = name => guild.questRank(members, members.find(m => m.name === name))
+  assert.deepEqual(['Ernani_', 'p4rme', 'D1NN0', 'nxly_', 'parmegio'].map(rank), [1, 2, 3, 3, 5], 'ties share a place')
+  const before = new Map(members.map(m => [m.name, m]))
+  const after = members.map(m => m.name === 'D1NN0' ? { ...m, quests: 17 } : m).concat({ name: 'newbie', quests: 3 })
+  assert.deepEqual(guild.questRises(before, after).map(m => [m.name, m.quests]), [['D1NN0', 17]], 'one post with the final count, a new member is no rise')
+
+  // Real lines from /guild quests (2026-11-02); \ue822 stands for the server's point icon.
+  const questSlots = [
+    { id: 'clock', lines: ['QUEST INFO', 'Farming Quest #1s: 56', 'Playtime Quests: 107', 'Total Quests: 328', 'Guild Points: \ue8222571', 'New quests available in', '⌚ 26m 59s!'] },
+    { id: 'book', lines: ['(⏺) FARMING QUEST #1', 'Quest', '| Farm 3,000 Black Paint', '| Progress: 0/3,000', 'Reward', '| \ue82250 Guild Points', 'Quest progress is shared', 'within the guild.', '┃ Reroll: Available'] },
+    { id: 'written_book', lines: ['(⏺) FARMING QUEST #2', 'Quest', '| Farm 7,500 Pineapple', '| Progress: 7,500/7,500', 'Reward', '| \ue822125 Guild Points'] },
+    { id: 'written_book', lines: ['(⏺) PLAYTIME QUEST', 'Quest', '| Play for 15 minutes', '| Progress: 15/15', 'Reward', '| \ue8225 Guild Points'] },
+    { id: 'arrow', lines: ['Back to Guild Info'] }
+  ]
+  const read = guild.readQuests(questSlots, 1000)
+  assert.deepEqual(read.quests, [
+    { name: 'FARMING QUEST #1', task: 'Farm 3,000 Black Paint', points: '50', done: false },
+    { name: 'FARMING QUEST #2', task: 'Farm 7,500 Pineapple', points: '125', done: true },
+    { name: 'PLAYTIME QUEST', task: 'Play for 15 minutes', points: '5', done: true }
+  ])
+  assert.equal(read.endsAt, 1000 + (26 * 60 + 59) * 1000)
+  assert.equal(read.total, 328)
+  assert.equal(read.points, 2571)
+  assert.equal(guild.readQuests([{ id: 'book', lines: ['GUILD QUESTS'] }]), null, 'not the quests menu')
+  const message = guild.questsMessage({ ...read, endsAt: Date.UTC(2026, 10, 2, 17, 0) }, { quests: [{ done: true }, { done: false }] }, 2571, '123456789012345678')
+  assert.equal(message.content, '<@&123456789012345678>')
+  assert.deepEqual(message.allowed_mentions, { roles: ['123456789012345678'] })
+  assert.equal(message.embeds[0].title, '🆕 Novas quests da guilda (até 14:00)', 'Brasília time')
+  assert.equal(message.embeds[0].description.split('\n')[0], '⛏ **Farming #1** — Farm 3,000 Black Paint · 50 pts')
+  assert.equal(message.embeds[0].description.split('\n')[2], '✅ **Playtime** — ~~Play for 15 minutes~~ · 5 pts', 'done: checked')
+  const withDoer = guild.questsMessage(read, null, NaN, '', { 'play for 15 minutes': '_raysz' }).embeds[0].description.split('\n')
+  assert.equal(withDoer[2], '✅ **Playtime** — ~~Play for 15 minutes~~ · 5 pts — **\\_raysz**', 'who did it, nick not italic')
+  assert.equal(withDoer[1], '✅ **Farming #2** — ~~Farm 7,500 Pineapple~~ · 125 pts', 'done, nobody known')
+  assert.equal(message.embeds[0].footer.text, 'Hora passada: 1/2 feitas · Guild Points 2571')
+  assert.equal(guild.questsMessage(read, null, NaN, '').content, '', 'no role, no ping')
+  assert.throws(() => guild.guildSettings({}, { roleId: '<@&12>' }), /Role ID/)
+
+  assert.equal(guild.findValue(['Completion 18.1%', 'Crops Discovered 20/48'], 'completion'), '18.1%')
+  assert.equal(guild.findValue(['Completion', '12%'], 'completion'), '12%')
+  assert.equal(guild.findValue(['Crops Farmed [#329]', 'Total: 257,500'], 'total'), '257,500')
+  assert.equal(guild.findValue(['nothing'], 'total'), null)
+  assert.equal(guild.numberValue('257,500'), 257500)
+  assert.equal(guild.numberValue('1.5k'), 1500)
+  assert.equal(guild.numberValue(null), -1)
+
+  assert.equal(guild.rankingSlot(Date.UTC(2026, 10, 2, 2, 59)), '2026-11-01/7', '23:59 in Brasília')
+  assert.equal(guild.rankingSlot(Date.UTC(2026, 10, 2, 3, 0)), '2026-11-02/0', 'midnight in Brasília')
+  assert.equal(guild.rankingSlot(Date.UTC(2026, 10, 2, 13, 0)), '2026-11-02/3', '10h in Brasília')
+
+  const hook = 'https://discord.com/api/webhooks/123/abc-DEF_9'
+  assert.throws(() => guild.guildSettings({}, { track: true }), /needs a webhook/)
+  assert.throws(() => guild.guildSettings({}, { trackWebhook: 'https://evil.example/api/webhooks/1/x' }), /Discord webhook/)
+  assert.throws(() => guild.guildSettings({}, { rankingWebhook: 'http://discord.com/api/webhooks/1/x' }), /Discord webhook/)
+  const on = guild.guildSettings({}, { track: true, trackWebhook: ' ' + hook + ' ', ranking: true, rankingWebhook: hook })
+  assert.equal(on.trackWebhook, hook)
+  assert.equal(on.lastSlot, guild.rankingSlot(), 'switching on does not post right away')
+  assert.equal(guild.guildSettings({ ...on, lastSlot: 'old' }, on).lastSlot, 'old', 'already on: keeps its slot')
+
+  // Rendered offline: no skin, and mc-heads.net may be unreachable; both must still give a picture.
+  const podium = await guild.podiumImage([
+    { name: 'a', completion: '20%', crops: '1' }, { name: 'b', completion: null, crops: null }, { name: 'c', completion: '5%', crops: '3' }, { name: 'd', completion: '1%', crops: '4' }
+  ])
+  assert.equal(podium.subarray(1, 4).toString(), 'PNG')
+  const questPlayers = members.map((m, i) => ({ ...m, delta: i % 2 ? 2 : 0 })).sort((a, b) => b.quests - a.quests)
+  const questPodium = await guild.podiumImage(questPlayers, guild.questLayout(questPlayers, 'Quests da hora: 5/5 · Guild Points 2571'))
+  assert.equal(questPodium.subarray(1, 4).toString(), 'PNG')
+  if (process.env.GUILD_IMAGES) {
+    fs.writeFileSync(path.join(process.env.GUILD_IMAGES, 'podium.png'), podium)
+    fs.writeFileSync(path.join(process.env.GUILD_IMAGES, 'quests-podium.png'), questPodium)
+  }
+}
+
+// Quests reset on the hour: the new ones are announced, a quest ranking goes out when all are done
+// or at the reset if anyone did one. A 3-hour ranking reads /stats of everyone, through one cooldown.
+async function guildFlow (dataDir) {
+  const data = require('minecraft-data')(VERSION)
+  const { server, chats } = fakeServer()
+  await new Promise(resolve => server.on('listening', resolve))
+  const posts = []
+  let sent = 0
+  const manager = new Manager({
+    dataDir,
+    tokens: { factory: () => { throw new Error('unused') }, remove: async () => {} },
+    botOptions: { auth: 'offline', username: 'p4rme' },
+    guildTiming: { ready: 200, questDelay: 200, questRetries: [300, 300], statsGap: [50, 100], cooldownStep: 100, cooldownMax: 200, afterReset: 100 },
+    postWebhook: async (url, png, filename, payload, messageId) => { posts.push({ url, png, filename, payload, messageId }); return messageId ?? `m${++sent}` }
+  })
+  manager.config.accounts.push({ id: 'a1', name: 'p4rme', uuid: 'u', servers: [] })
+  manager.addServer('a1', `127.0.0.1:${PORT}`, false)
+  const id = manager.config.accounts[0].servers[0].id
+  const conn = manager.conns.get(id)
+  const text = value => nbt.comp({ text: nbt.string(value) })
+  const quests = { p4rme: 18, D1NN0: 15, parmegio: 14 }
+  const item = (name, components = []) => ({ itemCount: 1, itemId: data.itemsByName[name].id, addedComponentCount: components.length, removedComponentCount: 0, components, removeComponents: [] })
+  const named = (title, lore) => [{ type: 'custom_name', data: text(title) }, { type: 'lore', data: lore.map(text) }]
+  const memberHead = name => item('player_head', [...named(`${name} (Online)`, ['Member', `${quests[name]} Quests Completed`]), { type: 'profile', data: { type: 'partial', name, properties: [], skinPatch: {} } }])
+  const show = (sc, title, slots) => {
+    sc.write('open_window', { windowId: 5, inventoryType: 5, windowTitle: text(title) })
+    sc.write('window_items', { windowId: 5, stateId: 1, items: Array.from({ length: 90 }, (_, i) => slots[i] ?? { itemCount: 0 }), carriedItem: { itemCount: 0 } })
+  }
+  let cooled = false
+  // The hour ends at resetAt, then a new set of quests starts.
+  const hour = { resetAt: Date.now() + 3600000, set: 1, done: [false, false] }
+  // Ends the announced hour early: the server shows the new countdown, the client already announced that hour.
+  const shift = ms => { hour.resetAt = Date.now() + ms; conn.server.guild.announced = hour.resetAt }
+  const questMenu = () => {
+    if (Date.now() >= hour.resetAt) Object.assign(hour, { resetAt: Date.now() + 3600000, set: hour.set + 1, done: [false, false] })
+    const left = Math.ceil((hour.resetAt - Date.now()) / 1000)
+    const quest = (n, done) => item(done ? 'written_book' : 'book', named(`(⏺) FARMING QUEST #${n}`, ['Quest', `| Farm ${hour.set * 10 + n} Wheat`, `| Progress: ${done ? 5 : 0}/5`, 'Reward', '| 50 Guild Points']))
+    return { 4: item('clock', named('QUEST INFO', ['Total Quests: 9', 'Guild Points: 100', 'New quests available in', `⌚ ${Math.floor(left / 60)}m ${left % 60}s!`])), 11: quest(1, hour.done[0]), 12: quest(2, hour.done[1]) }
+  }
+  const say = (sc, line) => sc.write('system_chat', { content: text(line), isActionBar: false })
+  const command = sc => ({ command }) => {
+    if (command === 'guild quests') show(sc, 'Guild Quests', questMenu())
+    if (command === 'guild') show(sc, 'Guild Info | test', { 4: item('player_head', [...named('GUILD INFO', ['x']), { type: 'profile', data: { type: 'partial', name: 'eggenjoyer', properties: [], skinPatch: {} } }]), 11: memberHead('parmegio'), 12: memberHead('p4rme'), 13: memberHead('D1NN0') })
+    const stats = /^stats (\w+)$/.exec(command)
+    if (!stats) return
+    if (stats[1] === 'D1NN0' && !cooled) {
+      cooled = true
+      return say(sc, 'Wait a moment before using /stats again.')
+    }
+    show(sc, `${stats[1]}'s Stats`, { 10: item('beacon', named('Completion ' + quests[stats[1]] + '%', [])), 12: item('wheat', named('Crops Farmed [#329]', ['Total: 1,000'])) })
+  }
+  server.on('playerJoin', sc => {
+    sc.on('chat_command', command(sc))
+    sc.on('chat_command_signed', command(sc))
+    sc.write('scoreboard_objective', { name: 'side', action: 0, displayText: text('COBBLESTONE'), type: 0 })
+    sc.write('scoreboard_display_objective', { position: 1, name: 'side' })
+  })
+
+  manager.setGuild(id, { track: true, trackWebhook: 'https://discord.com/api/webhooks/1/quests', roleId: '424242424242', ranking: true, rankingWebhook: 'https://discord.com/api/webhooks/1/ranking' })
+  assert.equal(manager.summary().accounts[0].servers[0].guild.track, true, 'the page sees its settings')
+  manager.connect(id)
+  await until('first reads', () => posts.length === 1)
+  assert.equal(conn.guildMembers.size, 3)
+  assert.equal(manager.detail(id).menu, null, 'menu closed after reading')
+  assert.equal(posts[0].png, null, 'this hour\'s quests, as a message')
+  assert.equal(posts[0].payload.content, '<@&424242424242>')
+  assert.match(posts[0].payload.embeds[0].description, /Farm 11 Wheat/)
+  assert(!posts[0].payload.embeds[0].footer?.text.includes('Hora passada'), 'no last hour seen yet')
+  const saved = () => manager.config.accounts[0].servers[0].guild
+  assert(saved().announced > Date.now(), 'kept, so a restart does not announce the same hour again')
+  assert.equal(posts[0].messageId, undefined, 'a new message for the hour')
+  assert.equal(saved().wave.messageId, 'm1', 'its id kept, to edit it')
+  posts.length = 0
+
+  // The count goes up a moment after the chat line, as on the real server. Playtime is not in this menu: nothing to edit.
+  say(server.lastClient, 'GUILDS • Guild quest complete: Play for 30 minutes')
+  say(server.lastClient, 'GUILDS • Guild received 10 Points')
+  setTimeout(() => { quests.D1NN0 = 17 }, 400)
+  await until('who did it', () => conn.chat.some(line => line.text === '[guild] D1NN0 completed Play for 30 minutes'), 10000)
+  await until('quests menu read after it', () => chats.filter(c => c === '/guild quests').length === 2)
+  await until('lock released', () => !conn.running)
+  assert.equal(saved().wave.doers['Play for 30 minutes'], 'D1NN0')
+  assert.equal(chats.filter(c => c === '/guild').length, 3, 'snapshot, then the first check found nothing, then the retry')
+  assert.equal(posts.length, 0, 'no banner per quest, and the message did not change')
+
+  say(server.lastClient, 'GUILDS • Guild quest complete: Farm 1000 crops')
+  await until('nobody went up', () => conn.chat.at(-1).text === '[guild] Quest completed, but nobody went up', 10000)
+  assert.equal(posts.length, 0)
+
+  // The hour's last quest: the hour's message is edited, then the quest ranking. The hour ends 3s later.
+  hour.done = [true, true]
+  shift(3000)
+  quests.p4rme = 19
+  say(server.lastClient, 'GUILDS • Guild quest complete: Farm 12 Wheat')
+  await until('edit and ranking after the last quest', () => posts.length === 2, 10000)
+  assert.equal(posts[0].messageId, 'm1', 'the same message, edited')
+  assert.deepEqual(posts[0].payload.embeds[0].description.split('\n'), [
+    '✅ **Farming #1** — ~~Farm 11 Wheat~~ · 50 pts',
+    '✅ **Farming #2** — ~~Farm 12 Wheat~~ · 50 pts — **p4rme**'
+  ])
+  assert.equal(posts[1].filename, 'quests.png')
+  assert.equal(posts[1].url, 'https://discord.com/api/webhooks/1/ranking', 'the quest ranking goes to the ranking channel')
+  assert.equal(posts[0].url, 'https://discord.com/api/webhooks/1/quests', 'the hour\'s message to the guild channel')
+  assert.equal(posts[1].messageId, undefined, 'the first quest ranking is posted')
+  assert.equal(posts[1].png.subarray(1, 4).toString(), 'PNG')
+  // At the reset: the new quests, and no ranking, nothing changed since the last one.
+  await until('new hour announced', () => posts.length === 3, 10000)
+  assert.equal(posts[2].messageId, undefined, 'each hour: a new message')
+  assert.match(posts[2].payload.embeds[0].description, /Farm 21 Wheat/)
+  assert.match(posts[2].payload.embeds[0].footer.text, /^Hora passada: 2\/2 feitas/)
+  await wait(1000)
+  assert.equal(posts.length, 3, 'no ranking without a change')
+
+  // One quest this hour, then the reset: the edit, the new hour, and the ranking edited in place.
+  hour.done = [true, false]
+  shift(3000)
+  quests.parmegio = 15
+  say(server.lastClient, 'GUILDS • Guild quest complete: Farm 21 Wheat')
+  await until('edit, new hour and the ranking', () => posts.length === 6, 15000)
+  assert.deepEqual(posts.slice(3).map(p => [p.messageId, p.filename, p.url.split("/").pop()]), [["m3", null, "quests"], [undefined, null, "quests"], ["m2", "quests.png", "ranking"]], "edit hour 2, post hour 3, edit the ranking")
+  assert.match(posts[3].payload.embeds[0].description, /~~Farm 21 Wheat~~ · 50 pts — \*\*parmegio\*\*/)
+  assert.match(posts[4].payload.embeds[0].footer.text, /^Hora passada: 1\/2 feitas/)
+  assert.equal(posts[5].filename, 'quests.png')
+
+  // The server's chat line brings the next hour in, without waiting for the countdown.
+  shift(0)
+  say(server.lastClient, 'GUILDS • New guild quests have become available!')
+  await until('announced from the chat line', () => posts.length === 7, 10000)
+  assert.match(posts[6].payload.embeds[0].description, /Farm 41 Wheat/)
+  say(server.lastClient, 'GUILDS • New guild quests have become available!')
+  await wait(1500)
+  assert.equal(posts.length, 7, 'once per hour')
+  posts.length = 0
+
+  manager.runRanking(id)
+  assert.throws(() => manager.runRanking(id), /already running/)
+  await until('ranking posted', () => posts.length === 1, 20000)
+  assert.equal(posts[0].filename, 'ranking.png')
+  assert.equal(posts[0].url, 'https://discord.com/api/webhooks/1/ranking')
+  assert.equal(posts[0].payload.embeds[0].image.url, 'attachment://ranking.png')
+  assert.equal(posts[0].messageId, undefined, 'the first ranking is posted')
+  const rankingId = saved().rankingMessage
+  assert(rankingId, 'its id kept')
+  assert.match(conn.chat.at(-1).text, /^\[guild\] Ranking sent: 3 players$/, 'the cooldown was waited out, nobody missing')
+  assert.equal(chats.filter(c => c === '/stats D1NN0').length, 2)
+  assert(!conn.running, 'the menu lock is released')
+  manager.runRanking(id)
+  await until('ranking edited', () => posts.length === 2, 20000)
+  assert.equal(posts[1].messageId, rankingId, 'the next ranking edits the same message')
+  manager.disconnect(id)
+  await until('offline', () => conn.status === 'offline')
+  assert.throws(() => manager.runRanking(id), /not online/)
+  server.close()
+}
+
+async function webhookEdits () {
+  const http = require('http')
+  const seen = []
+  const discord = http.createServer((req, res) => {
+    seen.push(`${req.method} ${req.url}`)
+    req.resume()
+    req.on('end', () => {
+      if (req.url.endsWith('/gone')) return res.writeHead(404).end()
+      res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ id: req.method === 'POST' ? 'new1' : 'kept' }))
+    })
+  })
+  await new Promise(resolve => discord.listen(25596, '127.0.0.1', resolve))
+  const url = 'http://127.0.0.1:25596/api/webhooks/1/abc'
+  try {
+    assert.equal(await guild.postWebhook(url, null, null, { content: 'x' }), 'new1')
+    assert.equal(await guild.postWebhook(url, Buffer.from('png'), 'a.png', {}, 'm9'), 'kept')
+    assert.equal(await guild.postWebhook(url, null, null, { content: 'x' }, 'gone'), 'new1', 'deleted on Discord: posted again')
+    assert.deepEqual(seen, ['POST /api/webhooks/1/abc?wait=true', 'PATCH /api/webhooks/1/abc/messages/m9', 'PATCH /api/webhooks/1/abc/messages/gone', 'POST /api/webhooks/1/abc?wait=true'])
+  } finally {
+    discord.close()
+  }
+}
+
 async function main () {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'afkclient-'))
   try {
@@ -665,9 +980,13 @@ async function main () {
     signedCommandChecksum(); console.log('ok  signed command checksum')
     groupRules(); console.log('ok  scoreboard amounts and button steps')
     requestChecks(); console.log('ok  request checks')
+    offlineChecks(); console.log('ok  offline alert')
+    await webhookEdits(); console.log('ok  webhook posts and edits')
     await tokens(path.join(root, 'tokens')); console.log('ok  encrypted token round trip')
     await multiUser(path.join(root, 'site')); console.log('ok  login, admin, account limits, users kept apart')
     await endToEnd(path.join(root, 'data')); console.log('ok  connect, chat, commands, menu click, controls, reconnect rules')
+    await guildRules(); console.log('ok  guild menu reading, ranks, settings, pictures')
+    await guildFlow(path.join(root, 'guild')); console.log('ok  guild quest post and ranking on a fake server')
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
   }
