@@ -48,10 +48,14 @@ function skinUrl (profile) {
 function readMembers (slots) {
   const members = []
   for (const slot of slots) {
-    const name = slot?.profile?.name
-    if (slot?.id !== 'player_head' || !/^\w{3,16}$/.test(name ?? '')) continue
+    if (slot?.id !== 'player_head') continue
     const text = slot.lines.join('\n')
-    if (!text.toLowerCase().includes(name.toLowerCase()) || members.some(m => m.name === name)) continue
+    // An offline member's head has no name, only a UUID: the title "nxly_ (Offline)" has it. The profile name only
+    // counts when the text shows it too: slot 4 (GUILD INFO) wears the server owner's skin.
+    const titled = /^(\w{3,16})\s*\((?:online|offline)\)/i.exec(slot.lines[0] ?? '')?.[1]
+    const profiled = /^\w{3,16}$/.test(slot.profile?.name ?? '') && text.toLowerCase().includes(slot.profile.name.toLowerCase()) ? slot.profile.name : null
+    const name = titled ?? profiled
+    if (!name || members.some(m => m.name === name)) continue
     const quests = /(\d[\d,]*)\s+quests?\s+completed/i.exec(text)
     const shown = label => new RegExp(`(\\d[\\d,.]*[kmbt]?)\\s+${label}`, 'i').exec(text)?.[1] ?? null
     members.push({ name, quests: quests ? Number(quests[1].replace(/,/g, '')) : null, crops: shown('crops farmed'), last24h: shown('last 24h'), skin: skinUrl(slot.profile) })
@@ -396,24 +400,14 @@ function attachGuild (manager, conn, bot, { ready, plain, lines, toText }) {
     // The heads arrive row by row: wait for as many as "GUILD INFO (10/10)" says, or the ranking had only the first 5.
     let partial = null
     let expected = null
-    let lastSlots = []
     const members = await settledWindow((window, slots) => {
       const found = readMembers(slots)
       expected = memberCount(slots)
-      lastSlots = slots
       if (found.length) partial = found
       return found.length && (!expected || found.length >= expected) ? found : null
     })
     manager.closeMenu(id)
-    if (!members && partial) {
-      log(`/guild showed ${partial.length} of ${expected ?? '?'} members, using those`)
-      // shortcut: what the skipped heads look like, to fix readMembers (2026-11-03: 5 of 10); remove once fixed
-      lastSlots.forEach((slot, i) => {
-        if (slot?.id === 'player_head' && !partial.some(m => m.name === slot.profile?.name)) {
-          log(`skipped head slot ${i}: ${JSON.stringify(slot.lines.slice(0, 2))} profile ${JSON.stringify(slot.profile ?? null).slice(0, 300)}`)
-        }
-      })
-    }
+    if (!members && partial) log(`/guild showed ${partial.length} of ${expected ?? '?'} members, using those`)
     if (!(members ?? partial)) throw new Error('/guild showed no member heads')
     return members ?? partial
   }

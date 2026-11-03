@@ -722,10 +722,12 @@ async function guildRules () {
     head('p4rme', ['p4rme (Online)', 'Elder', '18 Quests Completed']),
     head('D1NN0', ['D1NN0 (Online)', 'Member', '15 Quests Completed'], 'http://evil.example/skin.png'),
     head('Ernani_', ['Ernani_ (Online)', '31 Quests Completed']),
-    head('nxly_', ['nxly_ (Offline)', '15 Quests Completed'])
+    head('nxly_', ['nxly_ (Offline)', '15 Quests Completed']),
+    // as the bot really gets an offline member (log, 2026-11-03): a UUID and no name, only the title has it
+    { id: 'player_head', lines: ['_raysz (Offline)', 'Member', '8 Quests Completed'], profile: { type: 'partial', uuid: '9c24b371-080c-4397-a879-47595da9bdb1', properties: [], skinPatch: {} } }
   ]
   const members = guild.readMembers(slots)
-  assert.deepEqual(members.map(m => [m.name, m.quests]), [['parmegio', 14], ['p4rme', 18], ['D1NN0', 15], ['Ernani_', 31], ['nxly_', 15]], 'icon heads are not members')
+  assert.deepEqual(members.map(m => [m.name, m.quests]), [['parmegio', 14], ['p4rme', 18], ['D1NN0', 15], ['Ernani_', 31], ['nxly_', 15], ['_raysz', 8]], 'icon heads are not members, offline ones are')
   assert.equal(members[0].skin, 'http://textures.minecraft.net/texture/def')
   assert.equal(members[0].crops, '874.08k')
   assert.equal(members[2].skin, null, 'skins only from Mojang')
