@@ -70,6 +70,7 @@ An account whose name appears in a command skips that button, so it never pays i
 
 In a connection's ⋮ menu, under **Guilda**, each with its own Discord webhook:
 
+- **Aviso de queda** (per server per account): a webhook that gets "🔴 <account> caiu de <server> há 3 min — <reason>" once the account has been out for 3 minutes straight (disconnected, reconnecting or in the Minehut lobby), then "🟢 voltou (fora por X min)" when it is back. Disconnecting with the button posts nothing. Empty turns it off.
 - **Rastrear Guilda** reads /guild and /guild quests when the account gets in the game and every 30 minutes, with the webhook and the role to ping:
   - after a "Guild quest complete" chat line it reads /guild again (3s later, retried at 10s and 30s) and posts a banner for each member whose quest count went up: their head, nick and "Completou sua Quest X [#Y]", Y being their place by quests;
   - when the hour's quests reset ("New guild quests have become available!" in chat, else 15s after the QUEST INFO countdown ends) it posts the new quests as a message pinging the role, once per hour even across restarts;

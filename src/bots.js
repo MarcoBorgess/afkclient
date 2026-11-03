@@ -6,7 +6,8 @@ const { setTimeout: wait } = require('timers/promises')
 const mineflayer = require('mineflayer')
 const { Authflow, Titles } = require('prismarine-auth')
 const { computeChatChecksum } = require('minecraft-protocol/src/datatypes/checksums')
-const { attachGuild, guildSettings } = require('./guild')
+const { attachGuild, guildSettings, postWebhook } = require('./guild')
+const { watchOffline } = require('./offline')
 
 // Change this one value to move to a newer Minecraft once mineflayer supports it.
 const VERSION = '1.21.11'
@@ -389,6 +390,13 @@ class Manager extends EventEmitter {
     for (const account of this.config.accounts) {
       for (const server of account.servers) this.conns.set(server.id, this.newConn(account, server))
     }
+    this.offlineTimer = watchOffline({
+      conns: this.conns,
+      addressOf: conn => this.addressOf(conn),
+      isUp: conn => conn.status === 'online' && !!conn.bot && !inMinehutLobby(conn.readSidebar?.()),
+      post: (...args) => (this.postWebhook ?? postWebhook)(...args),
+      addChat: (conn, text) => this.addChat(conn, text)
+    })
   }
 
   newConn (account, server) {
@@ -563,6 +571,7 @@ class Manager extends EventEmitter {
   }
 
   shutdown () {
+    clearInterval(this.offlineTimer)
     for (const conn of this.conns.values()) {
       conn.wanted = false
       clearTimeout(conn.timer)

@@ -142,6 +142,12 @@
     <button id="menu-run-ranking" type="button">Rodar ranking agora</button>
     <div id="menu-guild-error" class="error" role="alert"></div>
   </fieldset>
+  <fieldset title="Posts when this account has been out of the server for 3 minutes (disconnected, reconnecting or stuck in the Minehut lobby), and again when it is back. Disconnect with the button: no post. Empty turns it off.">
+    <legend>Aviso de queda</legend>
+    <label class="field">Webhook
+      <input id="menu-offline-hook" type="url" class="guild-input" autocomplete="off" placeholder="https://discord.com/api/webhooks/...">
+    </label>
+  </fieldset>
   <button id="menu-remove-server" type="button" class="danger">Remove</button>
 </div>
 
@@ -394,11 +400,12 @@ function showGuild (guild) {
   $('menu-role').value = guild.roleId ?? ''
   $('menu-ranking').checked = !!guild.ranking
   $('menu-ranking-hook').value = guild.rankingWebhook ?? ''
+  $('menu-offline-hook').value = guild.offlineWebhook ?? ''
 }
 for (const input of document.querySelectorAll('.guild-input')) {
   input.onchange = () => {
     const server = menuServer
-    const values = { id: server.id, track: $('menu-track').checked, trackWebhook: $('menu-track-hook').value, roleId: $('menu-role').value, ranking: $('menu-ranking').checked, rankingWebhook: $('menu-ranking-hook').value }
+    const values = { id: server.id, track: $('menu-track').checked, trackWebhook: $('menu-track-hook').value, roleId: $('menu-role').value, ranking: $('menu-ranking').checked, rankingWebhook: $('menu-ranking-hook').value, offlineWebhook: $('menu-offline-hook').value }
     act('setGuild', values)
       .then(() => {
         $('menu-guild-error').textContent = ''

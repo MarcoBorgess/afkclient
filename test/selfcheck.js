@@ -14,6 +14,7 @@ const { isAllowedRequest, startServer, questsRefusal } = require('../src/server'
 const { createTokenStore } = require('../src/tokenCache')
 const { Users } = require('../src/users')
 const guild = require('../src/guild')
+const { offlineStep, offlineMessage, DOWN_AFTER } = require('../src/offline')
 
 const PORT = 25598
 const WEB_PORT = 25597
@@ -105,6 +106,28 @@ function groupRules () {
   assert.deepEqual(parseSteps('/rewards\n\nclick 2 minecraft:chest_minecart\nclick all diamond\nclose').map(s => s.type), ['send', 'click', 'clickAll', 'close'])
   assert.throws(() => parseSteps('click diamond'), /click <slot>/)
   assert.throws(() => parseSteps('  \n'), /Nothing to run/)
+}
+
+// The "caiu" alert: 3 minutes out in a row, once, then "voltou"; stopping with the button never posts.
+function offlineChecks () {
+  let state = {}
+  const step = (wanted, up, at) => { const r = offlineStep(state, { wanted, up }, at); state = r.state; return r.post }
+  assert.equal(step(true, true, 0), null, 'online')
+  assert.equal(step(true, false, 1000), null, 'just dropped')
+  assert.equal(step(true, false, 1000 + DOWN_AFTER - 1), null, 'not 3 minutes yet')
+  assert.deepEqual(step(true, false, 1000 + DOWN_AFTER), { kind: 'down' }, '3 minutes out')
+  assert.equal(step(true, false, 1000 + DOWN_AFTER + 60000), null, 'posted once')
+  assert.deepEqual(step(true, true, 1000 + 12 * 60000), { kind: 'back', downFor: 12 * 60000 }, 'back online')
+  assert.equal(step(true, true, 13 * 60000), null, 'nothing while up')
+  assert.equal(step(true, false, 14 * 60000), null)
+  assert.equal(step(true, true, 15 * 60000), null, 'a 1-minute blip posts nothing')
+  step(true, false, 16 * 60000)
+  assert.equal(step(false, false, 16 * 60000 + DOWN_AFTER), null, 'disconnected with the button')
+  assert.equal(step(true, false, 16 * 60000 + DOWN_AFTER + 1000), null, 'the 3 minutes start again after the button')
+  assert.match(offlineMessage({ kind: 'down' }, 'parmegio', 'cobblestone.minehut.gg', 'Kicked: Server restarting').content, /parmegio.*cobblestone\.minehut\.gg.*Server restarting/)
+  assert.match(offlineMessage({ kind: 'back', downFor: 12 * 60000 }, 'parmegio', 'cobblestone.minehut.gg').content, /voltou.*12 min/)
+  assert.equal(guild.guildSettings({}, { offlineWebhook: ' https://discord.com/api/webhooks/1/abc ' }).offlineWebhook, 'https://discord.com/api/webhooks/1/abc')
+  assert.throws(() => guild.guildSettings({}, { offlineWebhook: 'https://evil.com/x' }), /Aviso de queda/)
 }
 
 function requestChecks () {
@@ -902,6 +925,7 @@ async function main () {
     signedCommandChecksum(); console.log('ok  signed command checksum')
     groupRules(); console.log('ok  scoreboard amounts and button steps')
     requestChecks(); console.log('ok  request checks')
+    offlineChecks(); console.log('ok  offline alert')
     await tokens(path.join(root, 'tokens')); console.log('ok  encrypted token round trip')
     await multiUser(path.join(root, 'site')); console.log('ok  login, admin, account limits, users kept apart')
     await endToEnd(path.join(root, 'data')); console.log('ok  connect, chat, commands, menu click, controls, reconnect rules')

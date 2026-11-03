@@ -530,7 +530,7 @@ function attachGuild (manager, conn, bot, { ready, plain, lines, toText }) {
 }
 
 // From the page. A webhook is needed before its feature can be switched on.
-function guildSettings (current = {}, { track, trackWebhook, roleId, ranking, rankingWebhook }) {
+function guildSettings (current = {}, { track, trackWebhook, roleId, ranking, rankingWebhook, offlineWebhook }) {
   const hook = (value, label) => {
     const url = String(value ?? '').trim()
     if (url && !WEBHOOK.test(url)) throw new Error(`${label}: paste a Discord webhook URL (https://discord.com/api/webhooks/...)`)
@@ -538,7 +538,7 @@ function guildSettings (current = {}, { track, trackWebhook, roleId, ranking, ra
   }
   const role = String(roleId ?? '').trim()
   if (role && !ROLE_ID.test(role)) throw new Error('Role ID: only the digits from Copy Role ID')
-  const next = { ...current, track: !!track, trackWebhook: hook(trackWebhook, 'Rastrear Guilda'), roleId: role, ranking: !!ranking, rankingWebhook: hook(rankingWebhook, 'Ranking') }
+  const next = { ...current, track: !!track, trackWebhook: hook(trackWebhook, 'Rastrear Guilda'), roleId: role, ranking: !!ranking, rankingWebhook: hook(rankingWebhook, 'Ranking'), offlineWebhook: hook(offlineWebhook, 'Aviso de queda') }
   if (next.track && !next.trackWebhook) throw new Error('Rastrear Guilda needs a webhook')
   if (next.ranking && !next.rankingWebhook) throw new Error('Ranking needs a webhook')
   // Switching it on is not a reason to post right away: the next 3-hour slot is the first, or Run now.
@@ -546,4 +546,4 @@ function guildSettings (current = {}, { track, trackWebhook, roleId, ranking, ra
   return next
 }
 
-module.exports = { attachGuild, guildSettings, readMembers, readQuests, questRank, questRises, findValue, numberValue, rankingSlot, questImage, podiumImage, questLayout, questsMessage, skinUrl }
+module.exports = { postWebhook, attachGuild, guildSettings, readMembers, readQuests, questRank, questRises, findValue, numberValue, rankingSlot, questImage, podiumImage, questLayout, questsMessage, skinUrl }
