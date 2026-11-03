@@ -6,6 +6,8 @@ const { setTimeout: wait } = require('timers/promises')
 const mineflayer = require('mineflayer')
 const { Authflow, Titles } = require('prismarine-auth')
 const { computeChatChecksum } = require('minecraft-protocol/src/datatypes/checksums')
+const { attachGuild, guildSettings, postWebhook } = require('./guild')
+const { watchOffline } = require('./offline')
 
 // Change this one value to move to a newer Minecraft once mineflayer supports it.
 const VERSION = '1.21.11'
@@ -361,8 +363,11 @@ function traceConnection (bot) {
 }
 
 class Manager extends EventEmitter {
-  constructor ({ dataDir, tokens, botOptions = {}, flow = Authflow, addressGrace = ADDRESS_GRACE, maxAccounts = () => Infinity, isTaken = () => false, isAllowedServer = () => true }) {
+  constructor ({ dataDir, tokens, botOptions = {}, flow = Authflow, addressGrace = ADDRESS_GRACE, maxAccounts = () => Infinity, isTaken = () => false, isAllowedServer = () => true, guildTiming, postWebhook, defaultOfflineWebhook }) {
     super()
+    this.defaultOfflineWebhook = defaultOfflineWebhook
+    this.guildTiming = guildTiming
+    this.postWebhook = postWebhook
     this.configFile = path.join(dataDir, 'config.json')
     this.tokens = tokens
     this.maxAccounts = maxAccounts
@@ -386,9 +391,22 @@ class Manager extends EventEmitter {
     for (const account of this.config.accounts) {
       for (const server of account.servers) this.conns.set(server.id, this.newConn(account, server))
     }
+    if (this.offlineDefaulted) this.save()
+    this.offlineTimer = watchOffline({
+      conns: this.conns,
+      addressOf: conn => this.addressOf(conn),
+      isUp: conn => conn.status === 'online' && !!conn.bot && !inMinehutLobby(conn.readSidebar?.()),
+      post: (...args) => (this.postWebhook ?? postWebhook)(...args),
+      addChat: (conn, text) => this.addChat(conn, text)
+    })
   }
 
   newConn (account, server) {
+    // OFFLINE_WEBHOOK fills every server that never had the field; one cleared on the page ("") stays off.
+    if (this.defaultOfflineWebhook && server.guild?.offlineWebhook === undefined) {
+      server.guild = { ...server.guild, offlineWebhook: this.defaultOfflineWebhook }
+      this.offlineDefaulted = true
+    }
     return { account, server, wanted: false, status: 'offline', message: '', code: null, chat: [], delay: FIRST_DELAY, bot: null, timer: null, retryAt: null }
   }
 
@@ -487,6 +505,20 @@ class Manager extends EventEmitter {
     this.save()
   }
 
+  setGuild (id, values) {
+    const conn = this.conn(id)
+    conn.server.guild = guildSettings(conn.server.guild, values ?? {})
+    this.save()
+  }
+
+  runRanking (id) {
+    const conn = this.conn(id)
+    if (!conn.server.guild?.rankingWebhook) throw new Error('Paste the ranking webhook first')
+    if (conn.status !== 'online' || !conn.runRanking) throw new Error('This connection is not online')
+    if (conn.guildRanking) throw new Error('A ranking is already running')
+    conn.runRanking()
+  }
+
   setButtons (address, buttons) {
     this.checkKnownAddress(address)
     if (!Array.isArray(buttons)) throw new Error('Invalid buttons')
@@ -546,6 +578,7 @@ class Manager extends EventEmitter {
   }
 
   shutdown () {
+    clearInterval(this.offlineTimer)
     for (const conn of this.conns.values()) {
       conn.wanted = false
       clearTimeout(conn.timer)
@@ -666,6 +699,7 @@ class Manager extends EventEmitter {
       }
       clearTimeout(watchdog)
       clearInterval(addressCheck)
+      stopGuild()
       conn.bot = null
       conn.code = null
       bot.removeAllListeners('move')
@@ -723,10 +757,22 @@ class Manager extends EventEmitter {
     bot.on('message', (message, position) => {
       if (position !== 'game_info') this.addChat(conn, chatLine(message, position === 'chat' ? sender : null))
     })
+    const stopGuild = attachGuild(this, conn, bot, {
+      ready: () => conn.status === 'online' && !conn.captcha && !!conn.readSidebar() && !inMinehutLobby(conn.readSidebar()),
+      plain: plainCaps,
+      lines: item => {
+        const { name, lore } = serializeItem(item)
+        return [name, ...lore].map(line => line.trim()).filter(Boolean)
+      },
+      toText
+    })
     for (const event of ['windowOpen', 'windowClose', 'health', 'move', 'teamUpdated', 'teamCreated', 'teamMemberAdded']) {
       bot.on(event, () => this.emit('changed', conn.server.id))
     }
+    // Nothing here reads light, and it is most of each chunk's memory.
+    bot._client.prependListener('map_chunk', packet => { packet.skyLight = undefined })
     bot.once('inject_allowed', () => {
+      bot._client.removeAllListeners('update_light') // mineflayer's, added just before this
       bot.inventory.on('updateSlot', () => this.emit('changed', conn.server.id))
     })
     bot.on('windowOpen', window => {
