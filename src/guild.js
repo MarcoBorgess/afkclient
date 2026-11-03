@@ -59,6 +59,15 @@ function readMembers (slots) {
   return members
 }
 
+// "GUILD INFO (10/10)" on the /guild menu: how many member heads to wait for; null when not shown.
+function memberCount (slots) {
+  for (const slot of slots) {
+    const match = /^guild info\s*\((\d+)\s*\/\s*\d+\)/i.exec(slot?.lines[0] ?? '')
+    if (match) return Number(match[1])
+  }
+  return null
+}
+
 // The /guild quests menu: QUEST INFO (totals and the reset countdown) and the five quests.
 function readQuests (slots, now = Date.now()) {
   const info = slots.find(slot => slot && /^quest info$/i.test(slot.lines[0] ?? ''))
@@ -384,13 +393,19 @@ function attachGuild (manager, conn, bot, { ready, plain, lines, toText }) {
   async function readGuild () {
     manager.closeMenu(id)
     manager.send(id, '/guild')
+    // The heads arrive row by row: wait for as many as "GUILD INFO (10/10)" says, or the ranking had only the first 5.
+    let partial = null
+    let expected = null
     const members = await settledWindow((window, slots) => {
       const found = readMembers(slots)
-      return found.length ? found : null
+      expected = memberCount(slots)
+      if (found.length) partial = found
+      return found.length && (!expected || found.length >= expected) ? found : null
     })
     manager.closeMenu(id)
-    if (!members) throw new Error('/guild showed no member heads')
-    return members
+    if (!members && partial) log(`/guild showed ${partial.length} of ${expected ?? '?'} members, using those`)
+    if (!(members ?? partial)) throw new Error('/guild showed no member heads')
+    return members ?? partial
   }
 
   function remember (members) {
@@ -470,7 +485,10 @@ function attachGuild (manager, conn, bot, { ready, plain, lines, toText }) {
       const footer = `Quests da hora: ${counted(shownHour.quests).filter(q => q.done).length}/${counted(shownHour.quests).length} · Guild Points ${found.points}`
       // One message, edited every time (a new webhook or a deleted message starts a new one), in the ranking
       // channel with the 3-hour ranking; the quests channel only while no ranking webhook is set.
-      guild.questRankingMessage = await post(guild.rankingWebhook || guild.trackWebhook, await podiumImage(players, questLayout(players, footer)), 'quests.png', {}, guild.questRankingMessage) ?? guild.questRankingMessage
+      // Same look as the 3-hour "Guild Ranking": an embed with the picture in it.
+      guild.questRankingMessage = await post(guild.rankingWebhook || guild.trackWebhook, await podiumImage(players, questLayout(players, footer)), 'quests.png', {
+        embeds: [{ title: 'Quest Ranking', color: 0xe6b422, timestamp: new Date().toISOString(), image: { url: 'attachment://quests.png' } }]
+      }, guild.questRankingMessage) ?? guild.questRankingMessage
       guild.rankedAt = counts()
       manager.save()
       log('Quest ranking updated')
@@ -607,4 +625,4 @@ function guildSettings (current = {}, { track, trackWebhook, roleId, ranking, ra
   return next
 }
 
-module.exports = { WEBHOOK, postWebhook, trackRerolls, attachGuild, guildSettings, readMembers, readQuests, questRank, questRises, findValue, numberValue, rankingSlot, podiumImage, questLayout, questsMessage, skinUrl }
+module.exports = { WEBHOOK, postWebhook, trackRerolls, attachGuild, guildSettings, readMembers, memberCount, readQuests, questRank, questRises, findValue, numberValue, rankingSlot, podiumImage, questLayout, questsMessage, skinUrl }

@@ -771,6 +771,8 @@ async function guildRules () {
   assert.equal(guild.questsMessage(read, null, NaN, '').content, '', 'no role, no ping')
   assert.throws(() => guild.guildSettings({}, { roleId: '<@&12>' }), /Role ID/)
 
+  assert.equal(guild.memberCount([null, { lines: ['GUILD INFO (10/10)', 'Guild Creation Date: 10/28/26'] }]), 10)
+  assert.equal(guild.memberCount([{ lines: ['GUILD INFO'] }]), null, 'no count: take what settles')
   assert.equal(guild.findValue(['Completion 18.1%', 'Crops Discovered 20/48'], 'completion'), '18.1%')
   assert.equal(guild.findValue(['Completion', '12%'], 'completion'), '12%')
   assert.equal(guild.findValue(['Crops Farmed [#329]', 'Total: 257,500'], 'total'), '257,500')
@@ -850,7 +852,11 @@ async function guildFlow (dataDir) {
   const say = (sc, line) => sc.write('system_chat', { content: text(line), isActionBar: false })
   const command = sc => ({ command }) => {
     if (command === 'guild quests' && ignoreQuests-- <= 0) show(sc, 'Guild Quests', questMenu()) // the first one never opens, as on p4rme
-    if (command === 'guild') show(sc, 'Guild Info | test', { 4: item('player_head', [...named('GUILD INFO', ['x']), { type: 'profile', data: { type: 'partial', name: 'eggenjoyer', properties: [], skinPatch: {} } }]), 11: memberHead('parmegio'), 12: memberHead('p4rme'), 13: memberHead('D1NN0') })
+    if (command === 'guild') {
+      // as on the server: the heads come in a moment apart, and GUILD INFO says how many there are
+      show(sc, 'Guild Info | test', { 4: item('player_head', [...named('GUILD INFO (3/10)', ['x']), { type: 'profile', data: { type: 'partial', name: 'eggenjoyer', properties: [], skinPatch: {} } }]), 11: memberHead('parmegio') })
+      setTimeout(() => { for (const [slot, name] of [[12, 'p4rme'], [13, 'D1NN0']]) sc.write('set_slot', { windowId: 5, stateId: 2, slot, item: memberHead(name) }) }, 700)
+    }
     const stats = /^stats (\w+)$/.exec(command)
     if (!stats) return
     if (stats[1] === 'D1NN0' && !cooled) {
@@ -886,7 +892,7 @@ async function guildFlow (dataDir) {
   // The count goes up a moment after the chat line, as on the real server. Playtime is not in this menu: nothing to edit.
   say(server.lastClient, 'GUILDS • Guild quest complete: Play for 30 minutes')
   say(server.lastClient, 'GUILDS • Guild received 10 Points')
-  setTimeout(() => { quests.D1NN0 = 17 }, 400)
+  setTimeout(() => { quests.D1NN0 = 17 }, 1500) // after the first check has read /guild (its heads take 700 ms)
   await until('who did it', () => conn.chat.some(line => line.text === '[guild] D1NN0 completed Play for 30 minutes'), 10000)
   await until('quests menu read after it', () => chats.filter(c => c === '/guild quests').length === 3, 10000)
   await until('lock released', () => !conn.running)
@@ -915,6 +921,8 @@ async function guildFlow (dataDir) {
   assert.equal(posts[0].url, 'https://discord.com/api/webhooks/1/quests', 'the hour\'s message to the guild channel')
   assert.equal(posts[1].messageId, undefined, 'the first quest ranking is posted')
   assert.equal(posts[1].png.subarray(1, 4).toString(), 'PNG')
+  assert.equal(posts[1].payload.embeds[0].title, 'Quest Ranking', 'an embed, like the Guild Ranking')
+  assert.equal(posts[1].payload.embeds[0].image.url, 'attachment://quests.png')
   // At the reset: the new quests, and no ranking, nothing changed since the last one.
   await until('new hour announced', () => posts.length === 3, 10000)
   assert.equal(posts[2].messageId, undefined, 'each hour: a new message')
