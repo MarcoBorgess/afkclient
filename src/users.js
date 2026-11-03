@@ -1,5 +1,5 @@
 const { EventEmitter } = require('events')
-const { randomBytes, randomUUID, scrypt, scryptSync, timingSafeEqual } = require('crypto')
+const { createHash, randomBytes, randomUUID, scrypt, scryptSync, timingSafeEqual } = require('crypto')
 const fs = require('fs')
 const path = require('path')
 const { promisify } = require('util')
@@ -40,6 +40,9 @@ function cleanMax (value) {
   if (!Number.isInteger(max) || max < 0 || max > 100) throw new Error('The account limit is a whole number from 0 to 100')
   return max
 }
+
+// Same length whatever the input, so timingSafeEqual can compare the recovery password.
+const digest = text => createHash('sha256').update(String(text)).digest()
 
 async function hashPassword (password) {
   const salt = randomBytes(16).toString('hex')
@@ -83,6 +86,9 @@ class Users extends EventEmitter {
       this.save()
     }
     for (const user of this.list) this.startManager(user)
+    // ADMIN_USER + ADMIN_PASSWORD always open that admin account, even after its password was changed on the page:
+    // the way back in for whoever controls the host's environment (who could read everything anyway).
+    this.recovery = adminName && adminPassword ? { name: String(adminName).trim().toLowerCase(), password: digest(adminPassword) } : null
   }
 
   save () {
@@ -154,8 +160,9 @@ class Users extends EventEmitter {
     } finally {
       this.hashing--
     }
-    if (!user || !matches) throw fail('Wrong username or password', 401)
-    if (user.cost !== COST) {
+    const recovered = !matches && !!user?.admin && key === this.recovery?.name && timingSafeEqual(digest(password), this.recovery.password)
+    if (!user || !(matches || recovered)) throw fail('Wrong username or password', 401)
+    if (matches && user.cost !== COST) { // never on a recovery login: that would make ADMIN_PASSWORD the saved one
       Object.assign(user, await hashPassword(password))
       this.save()
     }
