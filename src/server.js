@@ -6,6 +6,8 @@ const path = require('path')
 const PUBLIC = path.join(__dirname, '..', 'public')
 const MAX_BODY = 64 * 1024
 const HEARTBEAT = 30000 // proxies close a stream that stays silent for too long
+const PUSH_EVERY = 1000
+const RECONNECT_AFTER = 15000
 // __Host- makes browsers refuse this cookie from any other site under squareweb.app.
 const cookieName = secure => `${secure ? '__Host-' : ''}afk_session`
 const COOKIE_LIFE = 30 * 24 * 3600
@@ -105,7 +107,8 @@ function startServer (users, { port, host = '127.0.0.1', allowedHosts, secure = 
     }
   }
 
-  // Coalesced, and idle with no page open, so walking bots don't cost anything.
+  // Coalesced, and idle with no page open, so walking bots don't cost anything. Each push makes the page fetch
+  // 2-3 endpoints: once a second keeps an open tab well under Square Shield's request limit (it blocked at 200 ms).
   users.on('changed', (userId, id) => {
     if (!streamsOf(userId).length) return
     if (!pending.has(userId)) pending.set(userId, new Set())
@@ -117,7 +120,7 @@ function startServer (users, { port, host = '127.0.0.1', allowedHosts, secure = 
       }
       pending.clear()
       flush = null
-    }, 200)
+    }, PUSH_EVERY)
   })
 
   setInterval(() => {
@@ -171,7 +174,7 @@ function startServer (users, { port, host = '127.0.0.1', allowedHosts, secure = 
       if (req.method === 'GET' && url.pathname === '/') return file('index.html', 'text/html; charset=utf-8')
       if (req.method === 'GET' && url.pathname === '/events') {
         res.writeHead(200, { ...HEADERS, 'Content-Type': 'text/event-stream', 'X-Accel-Buffering': 'no' })
-        res.write(': connected\n\n')
+        res.write(`retry: ${RECONNECT_AFTER}\n: connected\n\n`) // the browser's default 3s retry kept a blocked page hammering
         clients.set(res, { token, userId })
         return req.on('close', () => {
           clients.delete(res)
