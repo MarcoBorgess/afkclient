@@ -15,7 +15,7 @@ The app reads these environment variables:
 | `OFFLINE_WEBHOOK` | Optional Discord webhook. At startup it fills "Aviso de queda" on every server that never had it set, so nobody has to paste it; a field cleared on the page stays off. Kept out of the code because the repo is public. |
 | `QUESTS_TOKEN` | Optional, 32+ characters. Turns on `GET /api/quests` (header `Authorization: Bearer <token>`): the freshest /guild quests a bot read, for the CobbleUtils quest box. Unset, the endpoint answers 401. |
 | `ADMIN_USER` | Name of the first user, created on the first start |
-| `ADMIN_PASSWORD` | That user's password, at least 12 characters. Delete this variable after the first login |
+| `ADMIN_PASSWORD` | That user's password, at least 12 characters. Kept set, it is also the way back in: `ADMIN_USER` + `ADMIN_PASSWORD` always log into that admin account, even after its password was changed on the page (the saved password keeps working too). Remove it to turn that off |
 | `ALLOWED_SERVERS` | Optional. Servers people can connect to, comma separated, exact or like `*.example.com`. Defaults to `cobblestone.gg,*.cobblestone.gg,minehut.gg,*.minehut.gg` |
 
 Settings are in `squarecloud.app`. Data is stored in the `data` folder.
