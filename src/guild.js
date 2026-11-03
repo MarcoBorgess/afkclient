@@ -396,14 +396,24 @@ function attachGuild (manager, conn, bot, { ready, plain, lines, toText }) {
     // The heads arrive row by row: wait for as many as "GUILD INFO (10/10)" says, or the ranking had only the first 5.
     let partial = null
     let expected = null
+    let lastSlots = []
     const members = await settledWindow((window, slots) => {
       const found = readMembers(slots)
       expected = memberCount(slots)
+      lastSlots = slots
       if (found.length) partial = found
       return found.length && (!expected || found.length >= expected) ? found : null
     })
     manager.closeMenu(id)
-    if (!members && partial) log(`/guild showed ${partial.length} of ${expected ?? '?'} members, using those`)
+    if (!members && partial) {
+      log(`/guild showed ${partial.length} of ${expected ?? '?'} members, using those`)
+      // shortcut: what the skipped heads look like, to fix readMembers (2026-11-03: 5 of 10); remove once fixed
+      lastSlots.forEach((slot, i) => {
+        if (slot?.id === 'player_head' && !partial.some(m => m.name === slot.profile?.name)) {
+          log(`skipped head slot ${i}: ${JSON.stringify(slot.lines.slice(0, 2))} profile ${JSON.stringify(slot.profile ?? null).slice(0, 300)}`)
+        }
+      })
+    }
     if (!(members ?? partial)) throw new Error('/guild showed no member heads')
     return members ?? partial
   }
