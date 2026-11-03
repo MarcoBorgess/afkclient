@@ -1,6 +1,7 @@
 const path = require('path')
 const { startServer } = require('./server')
 const { Users } = require('./users')
+const { WEBHOOK } = require('./guild')
 
 const PORT = Number(process.env.PORT ?? 25599)
 const HOST = process.env.HOST ?? '127.0.0.1'
@@ -25,7 +26,9 @@ try {
     tokenKey: process.env.TOKEN_KEY,
     adminName: process.env.ADMIN_USER,
     adminPassword: process.env.ADMIN_PASSWORD,
-    allowedServers: SERVERS.split(',').map(server => server.trim().toLowerCase()).filter(Boolean)
+    allowedServers: SERVERS.split(',').map(server => server.trim().toLowerCase()).filter(Boolean),
+    // Env, not code: the repo is public and a webhook URL lets anyone post to the channel.
+    managerOptions: { defaultOfflineWebhook: WEBHOOK.test(process.env.OFFLINE_WEBHOOK?.trim() ?? '') ? process.env.OFFLINE_WEBHOOK.trim() : undefined }
   })
 } catch (err) {
   stop(err.message)
@@ -46,7 +49,7 @@ function quit () {
   setTimeout(() => process.exit(0), 500) // lets the disconnect packets go out
 }
 
-const server = startServer(users, { port: PORT, host: HOST, allowedHosts, secure: !LOCAL })
+const server = startServer(users, { port: PORT, host: HOST, allowedHosts, secure: !LOCAL, questsToken: process.env.QUESTS_TOKEN })
 
 server.on('listening', () => {
   console.log(`${new Date().toISOString()} AFK Client is running on ${HOST}:${PORT}`)

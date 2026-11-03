@@ -1,3 +1,4 @@
+const crypto = require('crypto')
 const fs = require('fs')
 const http = require('http')
 const path = require('path')
@@ -12,6 +13,17 @@ const HEADERS = {
   'Content-Security-Policy': "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' https://mc-heads.net; connect-src 'self'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'",
   'X-Content-Type-Options': 'nosniff',
   'Cache-Control': 'no-store'
+}
+
+// "Authorization: Bearer <QUESTS_TOKEN>", or "X-Quests-Token: <QUESTS_TOKEN>" where a proxy eats Authorization.
+// @return null when it matches, else why not (says nothing about the token itself)
+function questsRefusal (headers, token) {
+  if (!token || token.length < 32) return 'QUESTS_TOKEN is not set on the server (or is under 32 characters)'
+  const sent = /^Bearer (\S+)$/.exec(headers.authorization ?? '')?.[1] ?? headers['x-quests-token'] ?? ''
+  if (!sent) return 'No token reached the server'
+  const given = Buffer.from(sent)
+  const wanted = Buffer.from(token.trim())
+  return given.length === wanted.length && crypto.timingSafeEqual(given, wanted) ? null : 'Wrong token'
 }
 
 // Blocks other websites from acting with a logged-in browser. GETs change nothing.
@@ -58,6 +70,8 @@ function actions (manager) {
     setButtons: b => manager.setButtons(b.address, b.buttons),
     setCheckAddress: b => manager.setCheckAddress(b.address, b.value),
     setLobbyCommand: b => manager.setLobbyCommand(b.address, b.value),
+    setGuild: b => manager.setGuild(b.id, b),
+    runRanking: b => manager.runRanking(b.id),
     click: b => manager.click(b.id, b.slot, b.button),
     closeMenu: b => manager.closeMenu(b.id),
     selectHotbar: b => manager.selectHotbar(b.id, b.slot),
@@ -76,7 +90,7 @@ function adminActions (users, userId) {
   }
 }
 
-function startServer (users, { port, host = '127.0.0.1', allowedHosts, secure = false }) {
+function startServer (users, { port, host = '127.0.0.1', allowedHosts, secure = false, questsToken }) {
   const COOKIE = cookieName(secure)
   const allowedOrigins = allowedHosts.map(allowed => `${secure ? 'https' : 'http'}://${allowed}`)
   const clients = new Map() // open /events stream -> { token, userId }
@@ -126,6 +140,15 @@ function startServer (users, { port, host = '127.0.0.1', allowedHosts, secure = 
       const url = new URL(req.url, 'http://localhost')
       if (req.method === 'GET' && url.pathname === '/login') return file('login.html', 'text/html; charset=utf-8')
       if (req.method === 'GET' && /^\/cat-(cream|tabby)\.png$/.test(url.pathname)) return file(url.pathname.slice(1), 'image/png')
+      // Read-only, for the CobbleUtils mod's quest box: no session, a token of its own.
+      if (req.method === 'GET' && url.pathname === '/api/quests') {
+        const refusal = questsRefusal(req.headers, questsToken)
+        if (refusal) return json(401, { error: refusal })
+        const found = users.guildQuests()
+        return json(200, found
+          ? { endsAt: found.endsAt, readAt: found.readAt, quests: found.quests.map(({ name, task, done }) => ({ name, task, done })) }
+          : { endsAt: null, readAt: null, quests: [] })
+      }
       if (req.method === 'POST' && url.pathname === '/api/login') {
         const { name, password } = await readJson(req)
         const token = await users.login(name, password)
@@ -195,4 +218,4 @@ function startServer (users, { port, host = '127.0.0.1', allowedHosts, secure = 
   return server
 }
 
-module.exports = { startServer, isAllowedRequest }
+module.exports = { startServer, isAllowedRequest, questsRefusal }

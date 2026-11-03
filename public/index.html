@@ -34,6 +34,9 @@
   .menu button { display: block; width: 100%; text-align: left; border: 0; background: none; }
   .menu button:hover { background: #2c3038; }
   .menu label { display: flex; padding: 4px 10px; color: var(--text); }
+  .menu fieldset { border: 1px solid var(--line); border-radius: 4px; margin: 6px 4px; padding: 2px 0 6px; max-width: 340px; }
+  .menu legend { padding: 0 6px; color: var(--dim); font-size: 12px; }
+  .menu fieldset .error { padding: 0 10px; font-size: 12px; }
   .who { display: flex; align-items: center; gap: 8px; min-width: 0; overflow-wrap: anywhere; }
   .head { width: 24px; height: 24px; flex: none; border-radius: 3px; image-rendering: pixelated; }
   .dots { padding: 0 8px; font-size: 16px; line-height: 24px; }
@@ -123,6 +126,28 @@
   <label class="field" title="Sent when the scoreboard title is MINEHUT, again every 15 seconds until you leave the lobby. Empty turns it off.">Command in the Minehut lobby
     <input id="menu-lobby" type="text" maxlength="256" placeholder="/join cobble">
   </label>
+  <fieldset title="Reads /guild on this server and posts to Discord. Needs the account in the game, not in a lobby.">
+    <legend>Guilda</legend>
+    <label><input id="menu-track" type="checkbox" class="guild-input"> Rastrear Guilda</label>
+    <label class="field">Webhook das quests
+      <input id="menu-track-hook" type="url" class="guild-input" autocomplete="off" placeholder="https://discord.com/api/webhooks/...">
+    </label>
+    <label class="field" title="Pinged with each hour's new quests. Discord: Developer Mode on, right-click the role, Copy Role ID. Empty pings nobody.">ID do cargo para pingar
+      <input id="menu-role" type="text" inputmode="numeric" class="guild-input" autocomplete="off" placeholder="123456789012345678">
+    </label>
+    <label title="At 00, 03, 06 ... 21h Brasília time, or on arrival later in that 3-hour slot"><input id="menu-ranking" type="checkbox" class="guild-input"> Ranking a cada 3h</label>
+    <label class="field">Webhook do ranking
+      <input id="menu-ranking-hook" type="url" class="guild-input" autocomplete="off" placeholder="https://discord.com/api/webhooks/...">
+    </label>
+    <button id="menu-run-ranking" type="button">Rodar ranking agora</button>
+    <div id="menu-guild-error" class="error" role="alert"></div>
+  </fieldset>
+  <fieldset title="Posts when this account has been out of the server for 3 minutes (disconnected, reconnecting or stuck in the Minehut lobby), and again when it is back. Disconnect with the button: no post. Empty turns it off.">
+    <legend>Aviso de queda</legend>
+    <label class="field">Webhook
+      <input id="menu-offline-hook" type="url" class="guild-input" autocomplete="off" placeholder="https://discord.com/api/webhooks/...">
+    </label>
+  </fieldset>
   <button id="menu-remove-server" type="button" class="danger">Remove</button>
 </div>
 
@@ -360,6 +385,8 @@ function openServerMenu (button, server) {
   $('menu-auto').checked = server.autoConnect
   $('menu-check').checked = server.checkAddress
   $('menu-lobby').value = server.lobbyCommand
+  showGuild(server.guild ?? {})
+  $('menu-guild-error').textContent = ''
   openPopover('server-menu', button)
   $('menu-auto').focus()
 }
@@ -367,6 +394,32 @@ function openServerMenu (button, server) {
 $('menu-auto').onchange = e => run('setAutoConnect', { id: menuServer.id, value: e.target.checked })
 $('menu-check').onchange = e => run('setCheckAddress', { address: `${menuServer.host}:${menuServer.port}`, value: e.target.checked })
 $('menu-lobby').onchange = e => run('setLobbyCommand', { address: `${menuServer.host}:${menuServer.port}`, value: e.target.value })
+function showGuild (guild) {
+  $('menu-track').checked = !!guild.track
+  $('menu-track-hook').value = guild.trackWebhook ?? ''
+  $('menu-role').value = guild.roleId ?? ''
+  $('menu-ranking').checked = !!guild.ranking
+  $('menu-ranking-hook').value = guild.rankingWebhook ?? ''
+  $('menu-offline-hook').value = guild.offlineWebhook ?? ''
+}
+for (const input of document.querySelectorAll('.guild-input')) {
+  input.onchange = () => {
+    const server = menuServer
+    const values = { id: server.id, track: $('menu-track').checked, trackWebhook: $('menu-track-hook').value, roleId: $('menu-role').value, ranking: $('menu-ranking').checked, rankingWebhook: $('menu-ranking-hook').value, offlineWebhook: $('menu-offline-hook').value }
+    act('setGuild', values)
+      .then(() => {
+        $('menu-guild-error').textContent = ''
+        server.guild = { ...server.guild, ...values }
+      })
+      .catch(err => {
+        $('menu-guild-error').textContent = err.message
+        showGuild(server.guild ?? {}) // back to what is saved
+      })
+  }
+}
+$('menu-run-ranking').onclick = () => act('runRanking', { id: menuServer.id })
+  .then(() => { $('menu-guild-error').textContent = 'Ranking started, progress in the chat of Launch' })
+  .catch(err => { $('menu-guild-error').textContent = err.message })
 $('menu-remove-server').onclick = () => {
   $('server-menu').hidePopover()
   if (currentId === menuServer.id) closeView()
